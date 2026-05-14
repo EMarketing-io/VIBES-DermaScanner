@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Skin Scan Result</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+
+<div class="page">
+
+    <nav class="top-nav">
+        <div class="brand">
+            <div class="brand-mark">V</div>
+            <div>
+                <h3>Vibes AI DermaScan</h3>
+                <span>AI screening result completed</span>
+            </div>
+        </div>
+
+        <a href="/scan" class="nav-btn">New Scan</a>
+    </nav>
+
+    <section class="result-grid">
+
+        <div class="detected-card">
+            <div class="badge">Face Mapping</div>
+            <h2>AI Face Detection View</h2>
+
+            <div class="premium-scanner">
+                <div class="scanner-frame">
+                    <img src="{{ detected_url }}" class="scanner-face-img">
+
+                    <div class="scanner-blue-glow"></div>
+                    <div class="scanner-line"></div>
+                    <div class="scanner-grid"></div>
+
+                    <div class="floating-node n1"></div>
+                    <div class="floating-node n2"></div>
+                    <div class="floating-node n3"></div>
+                    <div class="floating-node n4"></div>
+
+                    <div class="scanner-status">
+                        <span></span>
+                        Scan Complete
+                    </div>
+                </div>
+            </div>
+
+            <p class="success">
+                Face detected successfully. AI screening has reviewed visible skin areas.
+            </p>
+        </div>
+
+        <div class="summary-card">
+            <div class="badge">AI Skin Screening</div>
+
+            <h1>{{ result.main_issue }}</h1>
+
+            <p class="summary">
+                {{ result.summary }}
+            </p>
+
+            <div class="score-box">
+                <div>
+                    <span>Confidence</span>
+                    <strong>{{ result.confidence }}%</strong>
+                </div>
+
+                <div>
+                    <span>Severity</span>
+                    <strong>{{ result.severity }}</strong>
+                </div>
+
+                <div>
+                    <span>Skin/Texture</span>
+                    <strong>{{ result.skin_tone }}</strong>
+                </div>
+            </div>
+
+            <div class="warning">
+                This is an AI screening only, not a confirmed medical diagnosis. For accurate treatment,
+                please consult a certified dermatologist.
+            </div>
+
+            <div class="bot-msg strong">
+                {{ result.chat }}
+            </div>
+
+            <div class="chat-actions">
+                <button>Book Doctor Visit</button>
+                <a href="/scan" class="main-btn secondary">Scan Again</a>
+            </div>
+        </div>
+
+    </section>
+
+    <section class="tips-card">
+        <div class="badge">Basic Care Plan</div>
+        <h2>Suggested Normal Care</h2>
+        <p class="section-subtitle">
+            These are safe basic suggestions only. Treatment should be decided by a dermatologist.
+        </p>
+
+        <div class="tips-grid">
+            {% for tip in result.tips %}
+            <div class="tip">{{ tip }}</div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="problem-areas">
+        <h2>Face Focus Areas</h2>
+        <p class="section-subtitle">
+            The system zoomed into common facial regions for visual review.
+        </p>
+
+        <div class="area-grid">
+            {% for region in regions %}
+            <div class="area-card">
+                <img src="{{ url_for('static', filename='uploads/' + region.file) }}">
+                <div class="area-info">
+                    <h3>{{ region.title }}</h3>
+                    <p>{{ region.concern }}</p>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="doctor-section">
+        <div class="badge">Recommended Next Step</div>
+        <h2>Book a Dermatologist Consultation</h2>
+        <p class="section-subtitle">
+            Vibes has experienced doctors and treatment offers available for skin concerns.
+        </p>
+
+        <div class="doctor-grid">
+            {% for doctor in doctors %}
+            <div class="doctor-card">
+                <div class="doctor-avatar">{{ doctor.name[3] }}</div>
+
+                <h3>{{ doctor.name }}</h3>
+                <p>{{ doctor.type }}</p>
+
+                <div class="doctor-meta">
+                    <span>⭐ {{ doctor.rating }}</span>
+                    <span>{{ doctor.experience }}</span>
+                </div>
+
+                <p>📍 {{ doctor.location }}</p>
+                <p>Consultation Fee: <b>{{ doctor.fee }}</b></p>
+
+                <button>Book Consultation</button>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="chat-section">
+        <div class="badge">AI Skin Assistant</div>
+        <h2>Ask Follow-up Questions</h2>
+
+        <div class="chat-box">
+            <div class="bot-msg">
+                You can ask about basic care, visible concern, or dermatologist visit.
+            </div>
+
+            <div class="mini-chat">
+                <h3>Skin Assistant</h3>
+
+                <div id="chatMessages" class="chat-messages">
+                    <div class="bot-msg">
+                        Ask me something like: What should I do for acne marks?
+                    </div>
+                </div>
+
+                <div class="chat-input-row">
+                    <input
+                        type="text"
+                        id="chatInput"
+                        placeholder="Type your skin question..."
+                    >
+                    <button onclick="sendChat()">Send</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+</div>
+
+<script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

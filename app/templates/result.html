@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+
+{% block title %}AI Skin & Hair Scan Result — Vibes DermaScan{% endblock %}
+
+{% block nav_actions %}
+<a href="/scan" class="btn btn-primary">New Scan</a>
+{% endblock %}
+
+{% block content %}
+
+<!-- Top: scanner + tabbed analysis -->
+<div class="result-top">
+
+    <!-- Scanner -->
+    <div class="card result-scan-card">
+        <div class="card-header">
+            <div class="badge">Face & Hair Mapping</div>
+            <h2>AI Detection View</h2>
+        </div>
+        <div class="scanner-dark result-scanner">
+            <div class="scanner-frame-inner">
+                <img src="{{ detected_url }}" class="scanner-result-img" alt="Detected face">
+                <div class="scan-line"></div>
+                <div class="scan-grid"></div>
+                <div class="scan-glow"></div>
+                <div class="scan-node n1"></div>
+                <div class="scan-node n2"></div>
+                <div class="scan-node n3"></div>
+                <div class="scan-node n4"></div>
+                <div class="scanner-status-bar">
+                    <span class="status-dot"></span> Scan Complete
+                </div>
+            </div>
+        </div>
+        <p class="success-msg">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            Face detected. AI has screened skin and hair.
+        </p>
+    </div>
+
+    <!-- Tabbed analysis panel -->
+    <div class="card analysis-panel">
+
+        <div class="analysis-tabs">
+            <button class="tab-btn active" onclick="switchTab('skin', this)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+                Skin Analysis
+            </button>
+            <button class="tab-btn" onclick="switchTab('hair', this)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2c-4 0-7 2-7 6 0 3 2 5 4 6l1 8h4l1-8c2-1 4-3 4-6 0-4-3-6-7-6z"/></svg>
+                Hair Analysis
+            </button>
+        </div>
+
+        <!-- SKIN TAB -->
+        <div id="tab-skin" class="tab-content active">
+            <div class="badge">AI Skin Screening</div>
+            <h1 class="result-issue">{{ result.main_issue }}</h1>
+            <p class="result-summary">{{ result.summary }}</p>
+
+            <div class="score-grid">
+                <div class="score-item">
+                    <span>Confidence</span>
+                    <div class="score-bar-wrap">
+                        <div class="score-bar" style="width: {{ result.confidence }}%"></div>
+                    </div>
+                    <strong>{{ result.confidence }}%</strong>
+                </div>
+                <div class="score-item">
+                    <span>Severity</span>
+                    <strong class="severity-tag severity-{{ result.severity | lower | replace(' ', '-') }}">{{ result.severity }}</strong>
+                </div>
+                <div class="score-item">
+                    <span>Skin / Texture</span>
+                    <strong>{{ result.skin_tone }}</strong>
+                </div>
+            </div>
+
+            <div class="alert alert-warning">
+                AI screening only — not a confirmed medical diagnosis. Consult a certified dermatologist for treatment.
+            </div>
+
+            <div class="ai-chat-bubble">
+                <div class="chat-bubble-icon">AI</div>
+                <p>{{ result.chat }}</p>
+            </div>
+
+            <div class="result-actions">
+                <button class="btn btn-primary">Book Skin Consultation</button>
+                <a href="/scan" class="btn btn-secondary">Scan Again</a>
+            </div>
+        </div>
+
+        <!-- HAIR TAB -->
+        <div id="tab-hair" class="tab-content">
+            <div class="badge badge-hair">AI Hair Screening</div>
+            <h1 class="result-issue hair-issue">{{ result.hair.main_issue }}</h1>
+            <p class="result-summary">{{ result.hair.summary }}</p>
+
+            <div class="score-grid">
+                <div class="score-item">
+                    <span>Confidence</span>
+                    <div class="score-bar-wrap">
+                        <div class="score-bar hair-bar" style="width: {{ result.hair.confidence }}%"></div>
+                    </div>
+                    <strong>{{ result.hair.confidence }}%</strong>
+                </div>
+                <div class="score-item">
+                    <span>Severity</span>
+                    <strong class="severity-tag severity-{{ result.hair.severity | lower | replace(' ', '-') }}">{{ result.hair.severity }}</strong>
+                </div>
+                <div class="score-item">
+                    <span>Hair Type</span>
+                    <strong>{{ result.hair.hair_type }}</strong>
+                </div>
+            </div>
+
+            <div class="alert alert-warning">
+                AI screening only — not a confirmed diagnosis. Consult a certified trichologist for treatment.
+            </div>
+
+            <div class="ai-chat-bubble hair-bubble">
+                <div class="chat-bubble-icon hair-icon">AI</div>
+                <p>{{ result.chat }}</p>
+            </div>
+
+            <div class="result-actions">
+                <button class="btn btn-hair">Book Hair Consultation</button>
+                <a href="/scan" class="btn btn-secondary">Scan Again</a>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<!-- SKIN CARE TIPS -->
+<div class="card section-card">
+    <div class="section-head">
+        <div class="badge">Skin Care Plan</div>
+        <h2>Suggested Skin Care Tips</h2>
+        <p>Safe basic suggestions only. Treatment should be decided by a dermatologist.</p>
+    </div>
+    <div class="tips-grid">
+        {% for tip in result.tips %}
+        <div class="tip-card">
+            <div class="tip-num">{{ loop.index }}</div>
+            <p>{{ tip }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- HAIR CARE TIPS -->
+<div class="card section-card">
+    <div class="section-head">
+        <div class="badge badge-hair">Hair Care Plan</div>
+        <h2>Suggested Hair Care Tips</h2>
+        <p>Safe basic suggestions only. Treatment should be decided by a trichologist.</p>
+    </div>
+    <div class="tips-grid">
+        {% for tip in result.hair.tips %}
+        <div class="tip-card tip-card-hair">
+            <div class="tip-num tip-num-hair">{{ loop.index }}</div>
+            <p>{{ tip }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- SKIN FOCUS AREAS -->
+{% if regions %}
+<div class="section-card">
+    <div class="section-head">
+        <div class="badge">Skin Focus Areas</div>
+        <h2>Face Skin Zones</h2>
+        <p>Zoomed skin regions where visible concerns were detected.</p>
+    </div>
+    <div class="regions-grid">
+        {% for region in regions %}
+        <div class="region-card">
+            <div class="region-img-wrap">
+                <img src="{{ url_for('static', filename='uploads/' + region.file) }}" alt="{{ region.title }}">
+                <div class="region-overlay"></div>
+                <span class="region-scan-line"></span>
+            </div>
+            <div class="region-info">
+                <h3>{{ region.title }}</h3>
+                <p>{{ region.concern }}</p>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- HAIR FOCUS AREAS -->
+{% if hair_regions %}
+<div class="section-card">
+    <div class="section-head">
+        <div class="badge badge-hair">Hair Focus Areas</div>
+        <h2>Hair & Scalp Zones</h2>
+        <p>Zoomed hair regions where visible concerns were detected.</p>
+    </div>
+    <div class="regions-grid">
+        {% for region in hair_regions %}
+        <div class="region-card region-card-hair">
+            <div class="region-img-wrap">
+                <img src="{{ url_for('static', filename='uploads/' + region.file) }}" alt="{{ region.title }}">
+                <div class="region-overlay region-overlay-hair"></div>
+                <span class="region-scan-line hair-scan-line"></span>
+            </div>
+            <div class="region-info">
+                <h3>{{ region.title }}</h3>
+                <p>{{ region.concern }}</p>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- DOCTORS -->
+<div class="card section-card">
+    <div class="section-head">
+        <div class="badge">Recommended Next Step</div>
+        <h2>Book a Specialist</h2>
+        <p>Vibes has experienced dermatologists and trichologists with treatment offers.</p>
+    </div>
+    <div class="doctors-grid">
+        {% for doctor in doctors %}
+        <div class="doctor-card">
+            <div class="doctor-avatar">{{ doctor.name[3] }}</div>
+            <div class="doctor-info">
+                <h3>{{ doctor.name }}</h3>
+                <p class="doctor-type">{{ doctor.type }}</p>
+                <div class="doctor-meta">
+                    <span class="meta-tag">⭐ {{ doctor.rating }}</span>
+                    <span class="meta-tag">{{ doctor.experience }}</span>
+                    <span class="meta-tag">📍 {{ doctor.location }}</span>
+                </div>
+                <div class="doctor-fee">Consultation: <strong>{{ doctor.fee }}</strong></div>
+            </div>
+            <button class="btn btn-primary btn-sm">Book</button>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- CHAT -->
+<div class="card section-card chat-section">
+    <div class="section-head">
+        <div class="badge">AI Skin & Hair Assistant</div>
+        <h2>Ask Follow-up Questions</h2>
+    </div>
+    <div class="chat-container">
+        <div id="chatMessages" class="chat-messages">
+            <div class="msg msg-bot">
+                <div class="msg-avatar">AI</div>
+                <div class="msg-text">Ask me about skin or hair — e.g. <em>What should I do for hair thinning?</em></div>
+            </div>
+        </div>
+        <div class="chat-input-wrap">
+            <input type="text" id="chatInput" placeholder="Ask about skin or hair…">
+            <button class="btn btn-primary" onclick="sendChat()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function switchTab(name, btn) {
+    document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    btn.classList.add('active');
+}
+</script>
+{% endblock %}
