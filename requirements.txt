@@ -1,7 +1,0 @@
-flask
-opencv-python
-mediapipe
-numpy
-pillow
-openai
-python-dotenv
