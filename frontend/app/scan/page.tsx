@@ -1,390 +1,589 @@
 "use client";
 
-import { useRef, useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import Navbar from "@/components/Navbar";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-const STEPS = [
-  { label: "Look Straight", hint: "Face the camera directly and keep your face centred in the frame.", arrow: "" },
-  { label: "Turn Left",     hint: "Slowly turn your head to the LEFT and hold still for the shot.",  arrow: "←" },
-  { label: "Turn Right",    hint: "Slowly turn your head to the RIGHT and hold still for the shot.", arrow: "→" },
+const instructions = [
+  {
+    icon: "smile",
+    title: "Clean, makeup-free face",
+    desc: "Remove all makeup and cleanse your face beforehand.",
+  },
+  {
+    icon: "sun",
+    title: "Bright, even lighting",
+    desc: "Natural daylight near a window works best.",
+  },
+  {
+    icon: "lines",
+    title: "Hair pulled back",
+    desc: "Clear your forehead, cheeks and jawline.",
+  },
+  {
+    icon: "clock",
+    title: "No filters, no beauty mode",
+    desc: "Turn off all smart enhancements on your phone camera.",
+  },
 ];
 
-type St = "idle" | "loading" | "ready" | "done" | "error";
+const checklist = [
+  "Detecting facial landmarks",
+  "Mapping pigmentation & dark spots",
+  "Measuring fine lines & texture",
+  "Evaluating hydration & firmness",
+  "Matching VIBES treatments",
+];
+
+const captureSteps = [
+  { title: "Front", instruction: "Look straight into the guide. Keep your full face centered." },
+  { title: "Slight left", instruction: "Turn only a little to your left. Keep both eyes mostly visible inside the guide." },
+  { title: "Slight right", instruction: "Turn only a little to your right. Keep both eyes mostly visible inside the guide." },
+];
+
+type Mode = "instructions" | "camera" | "review" | "loading";
+type DistanceStatus =
+  | "searching"
+  | "ok"
+  | "too_close"
+  | "too_far"
+  | "move_left"
+  | "move_right"
+  | "raise_face"
+  | "lower_face"
+  | "multiple_faces"
+  | "no_face"
+  | "unsupported";
+type FaceDetection = { boundingBox: { width: number; height: number; x?: number; y?: number } };
+type FaceDetectorInstance = { detect: (source: CanvasImageSource) => Promise<FaceDetection[]> };
+type FaceDetectorConstructor = new (options?: { fastMode?: boolean; maxDetectedFaces?: number }) => FaceDetectorInstance;
+type FaceGuide = { centerX: number; centerY: number; ratio: number };
+
+declare global {
+  interface Window {
+    FaceDetector?: FaceDetectorConstructor;
+  }
+}
+
+const distanceCopy: Record<DistanceStatus, string> = {
+  searching: "Finding face",
+  ok: "Perfect distance",
+  too_close: "Move back slightly",
+  too_far: "Move closer",
+  move_left: "Move left",
+  move_right: "Move right",
+  raise_face: "Raise face",
+  lower_face: "Lower face",
+  multiple_faces: "Only one face",
+  no_face: "Center face in guide",
+  unsupported: "Center face in guide",
+};
+
+const guidanceCopy: Record<DistanceStatus, string> = {
+  searching: "Hold still while we locate your face.",
+  ok: "Perfect. Hold steady and capture this photo.",
+  too_close: "Step back until your full face and chin fit inside the outline.",
+  too_far: "Move closer until your face fills most of the outline.",
+  move_left: "Move your face slightly left on the screen.",
+  move_right: "Move your face slightly right on the screen.",
+  raise_face: "Lift your face upward into the center of the outline.",
+  lower_face: "Lower your face slightly into the center of the outline.",
+  multiple_faces: "Only one person should be visible in the frame.",
+  no_face: "Bring your face into the outline and face the camera.",
+  unsupported: "Use the outline visually. When your face is centered, capture.",
+};
+
+function captureStepHint(index: number) {
+  if (index === 1) return "Only a small left turn is needed. Do not turn to a side profile.";
+  if (index === 2) return "Only a small right turn is needed. Do not turn to a side profile.";
+  return "Face the camera directly for the first photo.";
+}
+
+function canCaptureForShot(status: DistanceStatus, shotIndex: number) {
+  if (status === "unsupported") return true;
+  if (shotIndex === 0) return status === "ok";
+  return !["multiple_faces", "too_close", "too_far"].includes(status);
+}
+
+function Icon({ name }: { name: string }) {
+  const common = { width: 24, height: 24, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.7 } as const;
+  if (name === "camera") {
+    return <svg {...common}><path d="M7 7h2l1.4-2h3.2L15 7h2a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-6a3 3 0 0 1 3-3Z"/><circle cx="12" cy="13" r="3.3"/></svg>;
+  }
+  if (name === "upload") {
+    return <svg {...common}><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M5 20h14"/></svg>;
+  }
+  if (name === "sun") {
+    return <svg {...common}><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>;
+  }
+  if (name === "lines") {
+    return <svg {...common}><path d="M4 7h16M4 12h16M4 17h16"/></svg>;
+  }
+  if (name === "clock") {
+    return <svg {...common}><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>;
+  }
+  return <svg {...common}><circle cx="12" cy="12" r="8"/><path d="M8.5 10h.01M15.5 10h.01M8.8 14.5c1.7 1.6 4.7 1.6 6.4 0"/></svg>;
+}
 
 export default function ScanPage() {
   const router = useRouter();
-  const videoRef  = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const [mode, setMode] = useState<Mode>("instructions");
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [currentShot, setCurrentShot] = useState(0);
+  const [error, setError] = useState("");
+  const [cameraReady, setCameraReady] = useState(false);
+  const [distanceStatus, setDistanceStatus] = useState<DistanceStatus>("searching");
+  const [faceGuide, setFaceGuide] = useState<FaceGuide | null>(null);
 
-  const [shots, setShots]           = useState(0);
-  const [thumbs, setThumbs]         = useState<string[]>([]);
-  const [captured, setCaptured]     = useState<string[]>([]);
-  const [camReady, setCamReady]     = useState(false);
-  const [camErr, setCamErr]         = useState(false);
-  const [flashing, setFlashing]     = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError]           = useState("");
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadName, setUploadName] = useState("");
-  const [stText, setStText]         = useState("Starting camera…");
-  const [stState, setStState]       = useState<St>("idle");
-
-  const setStatus = useCallback((t: string, s: St) => { setStText(t); setStState(s); }, []);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 1280 }, facingMode: "user" },
-          audio: false,
-        });
-        streamRef.current = stream;
-        if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
-        setCamReady(true);
-        setCamErr(false);
-        setStatus("Camera ready — press Capture", "ready");
-      } catch {
-        setCamErr(true);
-        setStatus("Camera blocked — upload an image below", "error");
-      }
-    })();
-    return () => streamRef.current?.getTracks().forEach(t => t.stop());
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const stopCamera = useCallback(() => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    setCameraReady(false);
+    setDistanceStatus("searching");
+    setFaceGuide(null);
   }, []);
 
-  function capture() {
-    if (shots >= 3 || !videoRef.current || !canvasRef.current) return;
-    const v = videoRef.current, c = canvasRef.current;
-    c.width = v.videoWidth || 1280; c.height = v.videoHeight || 1280;
-    c.getContext("2d")!.drawImage(v, 0, 0);
-    const url = c.toDataURL("image/jpeg", 0.9);
-    setFlashing(true);
-    setTimeout(() => setFlashing(false), 350);
-    const next = shots + 1;
-    setCaptured(p => [...p, url]);
-    setThumbs(p => [...p, url]);
-    setShots(next);
-    if (next < 3) setStatus(`Shot ${next} captured — get ready for next`, "ready");
-    else setStatus("All 3 shots done!", "done");
-  }
+  useEffect(() => {
+    return () => stopCamera();
+  }, [stopCamera]);
 
-  function retake() {
-    setCaptured([]); setThumbs([]); setShots(0);
-    setStatus("Camera ready — press Capture", "ready");
-  }
+  useEffect(() => {
+    if (mode !== "camera" || !cameraReady) return;
 
-  async function analyze() {
-    if (!captured.length && !uploadFile) { setError("Capture photos or upload an image first."); return; }
-    setSubmitting(true); setError("");
-    const fd = new FormData();
-    if (uploadFile) { fd.append("face_images", uploadFile); }
-    else { captured.forEach((img, i) => fd.append(`camera_image_${i + 1}`, img)); }
+    const Detector = window.FaceDetector;
+    if (!Detector) {
+      setDistanceStatus("unsupported");
+      return;
+    }
+
+    let cancelled = false;
+    const detector = new Detector({ fastMode: true, maxDetectedFaces: 2 });
+
+    async function checkDistance() {
+      const video = videoRef.current;
+      if (!video || video.readyState < 2) return;
+      try {
+        const faces = await detector.detect(video);
+        if (cancelled) return;
+        if (!faces.length) {
+          setDistanceStatus("no_face");
+          return;
+        }
+        if (faces.length > 1) {
+          setDistanceStatus("multiple_faces");
+          return;
+        }
+
+        const face = faces[0].boundingBox;
+        const faceHeight = face.height;
+        const frameHeight = video.videoHeight || faceHeight;
+        const frameWidth = video.videoWidth || face.width;
+        const centerX = ((face.x ?? 0) + face.width / 2) / frameWidth;
+        const centerY = ((face.y ?? 0) + face.height / 2) / frameHeight;
+        const ratio = faceHeight / frameHeight;
+        setFaceGuide({ centerX, centerY, ratio });
+        if (centerX < 0.32) setDistanceStatus("move_right");
+        else if (centerX > 0.66) setDistanceStatus("move_left");
+        else if (centerY < 0.2) setDistanceStatus("lower_face");
+        else if (centerY > 0.76) setDistanceStatus("raise_face");
+        else if (ratio < 0.16) setDistanceStatus("too_far");
+        else if (ratio > 0.74) setDistanceStatus("too_close");
+        else setDistanceStatus("ok");
+      } catch {
+        if (!cancelled) {
+          setFaceGuide(null);
+          setDistanceStatus("unsupported");
+        }
+      }
+    }
+
+    checkDistance();
+    const interval = window.setInterval(checkDistance, 650);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [cameraReady, mode]);
+
+  async function startCamera() {
+    setError("");
+    setDistanceStatus("searching");
+    setFaceGuide(null);
+    setPhotos([]);
+    setCurrentShot(0);
+    setMode("camera");
     try {
-      const res = await fetch(`${API}/api/analyze`, { method: "POST", body: fd });
-      if (!res.ok) { const e = await res.json().catch(() => ({ detail: "Analysis failed." })); throw new Error(e.detail ?? "Analysis failed."); }
-      const data = await res.json();
-      localStorage.setItem("vibes_result", JSON.stringify(data));
-      router.push("/result");
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Analysis failed. Try again."); setSubmitting(false);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 1280 }, facingMode: "user" },
+        audio: false,
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setCameraReady(true);
+    } catch {
+      setError("Camera permission was blocked. Please upload a clear photo instead.");
+      setMode("instructions");
     }
   }
 
-  const step = Math.min(shots, 2);
-  const done = shots >= 3;
-  const cameraBlocked = camErr && !camReady;
-  const canCapture = camReady && !done;
+  function capturePhoto() {
+    if (!videoRef.current || !canvasRef.current) return;
+    const canUseCapture = canCaptureForShot(distanceStatus, currentShot);
+    if (!canUseCapture) {
+      setError(
+        currentShot === 0
+          ? "Center one face inside the guide until it turns green before capturing."
+          : "Keep one face inside the guide, not too close or too far, then capture the slight angle."
+      );
+      return;
+    }
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const vw = video.videoWidth || 1280;
+    const vh = video.videoHeight || 1280;
+    const cropW = Math.round(vw * 0.64);
+    const cropH = Math.round(vh * 0.84);
+    const sx = Math.round((vw - cropW) / 2);
+    const sy = Math.round((vh - cropH) / 2);
+    canvas.width = 900;
+    canvas.height = 1100;
+    canvas.getContext("2d")?.drawImage(video, sx, sy, cropW, cropH, 0, 0, canvas.width, canvas.height);
+    const nextPhoto = canvas.toDataURL("image/jpeg", 0.92);
+    const nextPhotos = [...photos, nextPhoto].slice(0, 3);
+    setPhotos(nextPhotos);
+    setError("");
+    localStorage.setItem("vibes_photo", nextPhotos[0]);
+    if (nextPhotos.length >= 3) {
+      stopCamera();
+      setMode("review");
+      return;
+    }
+    setCurrentShot(nextPhotos.length);
+    setDistanceStatus("searching");
+  }
 
-  return (
-    <>
-      {/* Loading overlay */}
-      {submitting && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(7,9,15,0.82)", backdropFilter: "blur(16px)" }}>
-          <div className="rounded-3xl p-12 text-center" style={{ background: "var(--bg-card2)", border: "1px solid var(--border)", maxWidth: 300, width: "90%" }}>
-            <div className="rings-wrap mx-auto mb-6">
-              <div className="ring ring-1" /><div className="ring ring-2" /><div className="ring ring-3" />
-              <div className="ring-icon">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="12" cy="12" r="3"/><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/>
-                </svg>
-              </div>
-            </div>
-            <div className="font-black text-lg mb-1" style={{ color: "var(--text)" }}>Analyzing…</div>
-            <div className="text-sm" style={{ color: "var(--text-muted)" }}>AI is scanning your skin &amp; hair</div>
+  function uploadPhoto(file: File | undefined) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setError("Please choose an image file.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const nextPhoto = String(reader.result || "");
+      setPhotos([nextPhoto, nextPhoto, nextPhoto]);
+      localStorage.setItem("vibes_photo", nextPhoto);
+      stopCamera();
+      setMode("review");
+    };
+    reader.readAsDataURL(file);
+  }
+
+  async function analyzePhoto() {
+    if (photos.length < 3) {
+      setError("Please capture all three guided photos before continuing.");
+      return;
+    }
+    setError("");
+    setMode("loading");
+
+    const form = new FormData();
+    photos.slice(0, 3).forEach((shot, index) => {
+      form.append(`camera_image_${index + 1}`, shot);
+    });
+    form.append("patient_info", localStorage.getItem("vibes_patient_info") ?? "{}");
+
+    try {
+      const res = await fetch(`${API}/api/analyze`, { method: "POST", body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail ?? "Analysis failed. Please try again.");
+      localStorage.setItem("vibes_result", JSON.stringify(data));
+      localStorage.setItem("vibes_photo", photos[0]);
+      router.push("/result");
+    } catch (event: unknown) {
+      setError(event instanceof Error ? event.message : "Analysis failed. Please try again.");
+      setMode("review");
+    }
+  }
+
+  if (mode === "review") {
+    return (
+      <main className="min-h-screen bg-white">
+        <header className="flex items-center justify-between px-6 py-6">
+          <Link href="/" className="font-serif-display text-2xl font-semibold" style={{ color: "var(--text)" }}>
+            VIBES
+          </Link>
+        </header>
+
+        <section className="clinical-shell flex min-h-[calc(100vh-180px)] flex-col justify-center py-8">
+          <div className="mx-auto mb-8 text-center">
+            <div className="step-label">Three photos captured</div>
+            <h1 className="font-serif-display mt-2 text-4xl font-semibold" style={{ color: "var(--text)" }}>
+              Review your guided scan.
+            </h1>
           </div>
-        </div>
-      )}
-
-      <div className="min-h-screen" style={{ background: "var(--bg)" }}>
-        <div className="max-w-7xl mx-auto px-6">
-
-          {/* NAV */}
-          <Navbar
-            right={
-              <Link href="/" className="px-4 py-2 rounded-xl text-sm font-semibold"
-                style={{ background: "var(--bg-card)", border: "1px solid var(--border)", color: "var(--text-sub)" }}>
-                Home
-              </Link>
-            }
-          />
-
-          {/* TWO-COLUMN GRID */}
-          <div className="grid lg:grid-cols-2 gap-8 pb-12 items-start">
-
-            {/* ── LEFT: Scanner ── */}
-            <div>
-              {/* Step progress */}
-              <div className="flex items-center justify-center mb-3">
-                {STEPS.map((s, i) => (
-                  <div key={s.label} className="flex items-center">
-                    <div className="flex flex-col items-center gap-1.5">
-                      <div
-                        className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-black transition-all duration-300 flex-shrink-0"
-                        style={
-                          i < shots
-                            ? { background: "var(--green)", color: "#fff", boxShadow: "0 0 12px rgba(52,211,153,0.4)" }
-                            : i === step
-                            ? { background: "var(--grad)", color: "white", boxShadow: "0 0 16px rgba(124,58,237,0.45)" }
-                            : { background: "var(--bg-card2)", border: "1px solid var(--border)", color: "var(--text-muted)" }
-                        }
-                      >
-                        {i < shots ? "✓" : i + 1}
-                      </div>
-                      <span className="text-[10px] font-semibold whitespace-nowrap"
-                        style={{ color: i < shots ? "var(--green)" : i === step ? "var(--purple)" : "var(--text-muted)" }}>
-                        {s.label}
-                      </span>
-                    </div>
-                    {i < 2 && <div className={`step-connector ${i < shots ? "done" : ""}`} />}
-                  </div>
-                ))}
-              </div>
-
-              {/* Scanner */}
-              <div className={`scanner-wrap ${camReady ? "camera-on" : ""}`} style={{ width: "100%", aspectRatio: "1" }}>
-                <div className="scanner-inner">
-                  <video ref={videoRef} autoPlay playsInline muted className="scan-video" />
-                  <canvas ref={canvasRef} className="hidden" />
-
-                  <div className="scan-glow" />
-                  <div className="scan-grid" />
-                  <div className="scan-line" />
-
-                  <svg className="demo-face-svg" width="160" height="200" viewBox="0 0 160 200" fill="none">
-                    <ellipse cx="80" cy="100" rx="56" ry="77" stroke="rgba(139,92,246,0.45)" strokeWidth="1.5"/>
-                    <ellipse cx="59" cy="80" rx="9" ry="5" stroke="rgba(139,92,246,0.4)" strokeWidth="1.2"/>
-                    <ellipse cx="101" cy="80" rx="9" ry="5" stroke="rgba(139,92,246,0.4)" strokeWidth="1.2"/>
-                    <path d="M73 100 Q80 108 87 100" stroke="rgba(139,92,246,0.3)" strokeWidth="1.2"/>
-                    <path d="M63 128 Q80 138 97 128" stroke="rgba(139,92,246,0.4)" strokeWidth="1.2"/>
-                  </svg>
-
-                  {/* Direction arrow */}
-                  <div className={`dir-arrow ${!camErr && !done && STEPS[step]?.arrow ? "show" : ""}`}>
-                    {STEPS[step]?.arrow}
-                  </div>
-
-                  {/* Corner accents */}
-                  <div style={{ position:"absolute", width:20, height:20, top:12, left:12, borderTop:"2px solid var(--purple)", borderLeft:"2px solid var(--purple)", borderRadius:"4px 0 0 0", zIndex:10 }} />
-                  <div style={{ position:"absolute", width:20, height:20, top:12, right:12, borderTop:"2px solid var(--pink)", borderRight:"2px solid var(--pink)", borderRadius:"0 4px 0 0", zIndex:10 }} />
-                  <div style={{ position:"absolute", width:20, height:20, bottom:12, left:12, borderBottom:"2px solid var(--pink)", borderLeft:"2px solid var(--pink)", borderRadius:"0 0 0 4px", zIndex:10 }} />
-                  <div style={{ position:"absolute", width:20, height:20, bottom:12, right:12, borderBottom:"2px solid var(--purple)", borderRight:"2px solid var(--purple)", borderRadius:"0 0 4px 0", zIndex:10 }} />
-
-                  <div className="node node-1" /><div className="node node-2" />
-                  <div className="node node-3" /><div className="node node-4" />
-
-                  <div className={`cap-flash ${flashing ? "flash" : ""}`} />
-
-                  <div className="scan-status">
-                    <span className={`status-dot ${stState}`} />
-                    <span>{stText}</span>
-                  </div>
-
-                  {!done && !cameraBlocked && (
-                    <button
-                      type="button"
-                      onClick={capture}
-                      disabled={!canCapture}
-                      className="scanner-capture-btn"
-                    >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                        <circle cx="12" cy="12" r="3"/>
-                        <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/>
-                      </svg>
-                      <span>{canCapture ? `Capture ${shots + 1}` : "Starting..."}</span>
-                    </button>
-                  )}
+          <div className="grid gap-4 md:grid-cols-3">
+            {photos.slice(0, 3).map((shot, index) => (
+              <div key={index} className="clinical-card overflow-hidden">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={shot} alt={`${captureSteps[index].title} scan photo`} className="aspect-[4/5] w-full object-cover" />
+                <div className="flex items-center justify-between p-4">
+                  <span className="text-sm font-bold" style={{ color: "var(--text)" }}>{captureSteps[index].title}</span>
+                  <span className="section-kicker">0{index + 1}</span>
                 </div>
               </div>
+            ))}
+          </div>
+        </section>
 
-              {/* Thumbnails */}
-              {thumbs.length > 0 && (
-                <div className="flex gap-3 justify-center mt-4">
-                  {[0, 1, 2].map(i => (
-                    <div key={i} className="w-16 h-16 rounded-xl overflow-hidden flex items-center justify-center"
-                      style={{ background: "var(--bg-card)", border: `1px solid ${thumbs[i] ? "var(--border-accent)" : "var(--border)"}` }}>
-                      {thumbs[i]
-                        ? <img src={thumbs[i]} alt={`Shot ${i+1}`} className="w-full h-full object-cover" />
-                        : <span className="text-[9px]" style={{ color: "var(--text-muted)" }}>Shot {i+1}</span>}
+        {error && <p className="mx-auto max-w-xl px-6 text-center text-sm font-semibold" style={{ color: "var(--accent)" }}>{error}</p>}
+
+        <footer className="clinical-shell flex items-center justify-between border-t py-7" style={{ borderColor: "var(--border)" }}>
+          <button type="button" className="text-link" onClick={() => { setPhotos([]); setCurrentShot(0); localStorage.removeItem("vibes_photo"); setMode("instructions"); }}>
+            Retake
+          </button>
+          <button type="button" className="text-link primary" onClick={analyzePhoto}>
+            Use these photos
+          </button>
+        </footer>
+      </main>
+    );
+  }
+
+  if (mode === "loading") {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-white px-6 text-center">
+        <div className="relative mb-12 h-64 w-64">
+          <div
+            className="absolute -inset-10 rounded-full"
+            style={{ background: "radial-gradient(circle, rgba(181,84,28,0.18) 0%, rgba(255,255,255,0.82) 52%, rgba(255,255,255,0) 72%)" }}
+          />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={photos[0]} alt="Analyzing selected face" className="relative h-64 w-64 rounded-full object-cover" />
+        </div>
+
+        <div className="grid gap-4 text-left">
+          {checklist.map((item, index) => (
+            <div
+              key={item}
+              className="flex items-center gap-3 text-sm font-semibold opacity-0"
+              style={{ color: "var(--text-sub)", animation: `checklistFade 420ms ease forwards`, animationDelay: `${index * 800}ms` }}
+            >
+              <span className="h-2 w-2 rounded-full" style={{ background: "var(--accent)" }} />
+              {item}
+            </div>
+          ))}
+        </div>
+      </main>
+    );
+  }
+
+  if (mode === "camera") {
+    const guideOk = canCaptureForShot(distanceStatus, currentShot);
+    const guideColor = guideOk ? "var(--green)" : "var(--accent)";
+    const captureEnabled = cameraReady && guideOk;
+
+    return (
+      <main className="h-screen overflow-hidden bg-white">
+        <div className="clinical-shell h-full">
+          <Navbar />
+          <section className="mx-auto flex h-[calc(100vh-96px)] max-w-6xl flex-col justify-between pb-6 pt-2">
+            <div className="grid min-h-0 flex-1 items-center gap-6 md:grid-cols-[minmax(0,1fr)_320px]">
+              <div
+                className="relative overflow-hidden border bg-black"
+                style={{
+                  borderColor: "var(--border)",
+                  width: "min(100%, 640px)",
+                  height: "min(62vh, 520px)",
+                }}
+              >
+                <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
+                <div
+                  className="pointer-events-none absolute left-1/2 top-1/2 h-[72%] w-[44%] -translate-x-1/2 -translate-y-1/2 rounded-[46%]"
+                  style={{
+                    border: `4px solid ${guideColor}`,
+                    boxShadow: `0 0 0 999px rgba(0, 0, 0, 0.22), 0 0 28px ${guideOk ? "rgba(61,123,90,0.45)" : "rgba(181,84,28,0.45)"}`,
+                  }}
+                />
+                {distanceStatus === "move_left" && (
+                  <div className="absolute left-6 top-1/2 -translate-y-1/2 text-5xl font-bold" style={{ color: guideColor }}>←</div>
+                )}
+                {distanceStatus === "move_right" && (
+                  <div className="absolute right-6 top-1/2 -translate-y-1/2 text-5xl font-bold" style={{ color: guideColor }}>→</div>
+                )}
+                {distanceStatus === "raise_face" && (
+                  <div className="absolute left-1/2 top-16 -translate-x-1/2 text-5xl font-bold" style={{ color: guideColor }}>↑</div>
+                )}
+                {distanceStatus === "lower_face" && (
+                  <div className="absolute bottom-10 left-1/2 -translate-x-1/2 text-5xl font-bold" style={{ color: guideColor }}>↓</div>
+                )}
+                <div
+                  className="absolute left-1/2 top-4 -translate-x-1/2 whitespace-nowrap rounded-full px-4 py-2 text-xs font-bold uppercase tracking-[0.12em]"
+                  style={{
+                    background: "rgba(255,255,255,0.92)",
+                    color: guideColor,
+                    border: `1px solid ${guideColor}`,
+                  }}
+                >
+                  {distanceCopy[distanceStatus]}
+                </div>
+                {faceGuide && distanceStatus !== "ok" && (
+                  <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.1em]" style={{ background: "rgba(255,255,255,0.86)", color: "var(--text-sub)" }}>
+                    x {Math.round(faceGuide.centerX * 100)} · y {Math.round(faceGuide.centerY * 100)} · size {Math.round(faceGuide.ratio * 100)}
+                  </div>
+                )}
+                <div className="absolute bottom-4 left-4 right-4 border bg-white/90 p-3 text-center backdrop-blur-sm md:hidden" style={{ borderColor: guideColor }}>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: guideColor }}>{distanceCopy[distanceStatus]}</div>
+                  <div className="mt-1 text-xs font-semibold" style={{ color: "var(--text-sub)" }}>{guidanceCopy[distanceStatus]}</div>
+                </div>
+              </div>
+              <aside className="clinical-card p-5">
+                <div className="section-kicker">Photo {currentShot + 1} of 3</div>
+                <h1 className="font-serif-display mt-2 text-4xl font-semibold leading-none" style={{ color: "var(--text)" }}>
+                  {captureSteps[currentShot]?.title}
+                </h1>
+                <p className="mt-4 text-sm leading-6" style={{ color: "var(--text-sub)" }}>
+                  {captureSteps[currentShot]?.instruction}
+                </p>
+
+                <div className="mt-5 border-l-2 bg-[#f9f7f4] p-4" style={{ borderColor: guideColor }}>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: guideColor }}>Guidance</div>
+                  <div className="mt-2 text-base font-bold" style={{ color: "var(--text)" }}>{distanceCopy[distanceStatus]}</div>
+                  <p className="mt-2 text-sm leading-6" style={{ color: "var(--text-sub)" }}>{guidanceCopy[distanceStatus]}</p>
+                </div>
+
+                <div className="mt-4 border p-3" style={{ borderColor: "var(--border)" }}>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--accent)" }}>Angle guide</div>
+                  <p className="mt-2 text-sm leading-6" style={{ color: "var(--text-sub)" }}>{captureStepHint(currentShot)}</p>
+                </div>
+
+                <div className="mt-6 grid gap-3">
+                  {captureSteps.map((step, index) => (
+                    <div
+                      key={step.title}
+                      className="flex items-center justify-between border p-3"
+                      style={{
+                        borderColor: index < photos.length ? "var(--green)" : index === currentShot ? "var(--accent)" : "var(--border)",
+                        color: index < photos.length ? "var(--green)" : index === currentShot ? "var(--accent)" : "var(--text-sub)",
+                      }}
+                    >
+                      <span className="text-xs font-bold uppercase tracking-[0.12em]">{step.title}</span>
+                      <span className="text-xs font-bold">{index < photos.length ? "Done" : `0${index + 1}`}</span>
                     </div>
                   ))}
                 </div>
-              )}
-            </div>
 
-            {/* ── RIGHT: Controls ── */}
-            <div className="flex flex-col gap-5 lg:pt-14">
-
-              {/* Heading */}
-              <div>
-                <h1 className="text-3xl font-black tracking-tight mb-1" style={{ color: "var(--text)" }}>
-                  {done ? "Ready to analyze" : cameraBlocked ? "Upload a photo" : `Step ${shots + 1} of 3`}
-                </h1>
-                <p className="text-sm leading-relaxed" style={{ color: "var(--text-muted)" }}>
-                  {done
-                    ? "All three angles captured. Hit Analyze to get your AI skin & hair report."
-                    : cameraBlocked
-                    ? "Camera permission was denied. Use the upload section below instead."
-                    : STEPS[step].hint}
-                </p>
-              </div>
-
-              {/* Analysis error */}
-              {error && (
-                <div className="flex items-center gap-2 px-4 py-3 rounded-2xl text-sm font-semibold"
-                  style={{ background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)", color: "var(--red)" }}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                  {error}
+                <div className="mt-6 grid grid-cols-3 gap-2">
+                  {[0, 1, 2].map((index) => (
+                    <div key={index} className="aspect-[4/5] overflow-hidden border" style={{ borderColor: "var(--border)", background: "var(--bg-soft)" }}>
+                      {photos[index] ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={photos[index]} alt={`${captureSteps[index].title} captured`} className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-xs font-bold" style={{ color: "var(--text-muted)" }}>
+                          0{index + 1}
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
-              )}
-
-              {/* ── Camera capture buttons — always visible ── */}
-              <div className="flex gap-3">
-                {done && (
-                  <button onClick={retake}
-                    className="flex items-center gap-2 px-5 rounded-2xl text-sm font-bold transition-all hover:-translate-y-0.5"
-                    style={{ height: 52, background: "var(--bg-card2)", border: "1px solid var(--border)", color: "var(--text-sub)" }}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/>
-                    </svg>
-                    Retake
+              </aside>
+              <canvas ref={canvasRef} className="hidden" />
+            </div>
+            {error && <p className="mt-4 text-sm font-semibold" style={{ color: "var(--accent)" }}>{error}</p>}
+            <footer className="flex flex-shrink-0 items-center justify-between border-t pt-5" style={{ borderColor: "var(--border)" }}>
+              <button type="button" className="text-link" onClick={() => { stopCamera(); setMode("instructions"); }}>
+                ← Back
+              </button>
+              <div className="flex items-center gap-5">
+                {!captureEnabled && cameraReady && (
+                  <button type="button" className="text-link" onClick={() => setDistanceStatus("unsupported")}>
+                    Looks centered
                   </button>
                 )}
-
-                {!done && !cameraBlocked && (
-                  <button onClick={capture} disabled={!camReady}
-                    className="grad-btn flex-1 flex items-center justify-center gap-2 rounded-2xl text-sm"
-                    style={{ height: 52, boxShadow: "0 8px 24px rgba(124,58,237,0.3)" }}>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <circle cx="12" cy="12" r="3"/>
-                      <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/>
-                    </svg>
-                    {!camReady ? "Starting camera…" : `Capture Shot ${shots + 1}`}
-                  </button>
-                )}
-
-                {done && (
-                  <button onClick={analyze}
-                    className="grad-btn flex-1 flex items-center justify-center gap-2 rounded-2xl text-sm"
-                    style={{ height: 52, boxShadow: "0 8px 24px rgba(124,58,237,0.3)" }}>
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-                    </svg>
-                    Analyze My Skin &amp; Hair
-                  </button>
-                )}
-              </div>
-
-              {/* Divider */}
-              <div className="flex items-center gap-3">
-                <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
-                <span className="text-xs font-semibold" style={{ color: "var(--text-muted)" }}>
-                  {cameraBlocked ? "upload a photo" : "or upload instead"}
-                </span>
-                <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
-              </div>
-
-              {/* Upload card */}
-              <div className="rounded-3xl p-5" style={{ background: "var(--bg-card2)", border: "1px solid var(--border)" }}>
-                <h2 className="text-sm font-black mb-1" style={{ color: "var(--text)" }}>Upload an Image</h2>
-                <p className="text-xs mb-4" style={{ color: "var(--text-muted)" }}>Use a clear, well-lit front-facing selfie for best results.</p>
-
-                <label className="flex items-center gap-3 p-4 rounded-2xl cursor-pointer mb-3 transition-all"
-                  style={{ background: "var(--bg-card)", border: "1.5px dashed var(--border-accent)" }}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"
-                    style={{ color: "var(--purple)", flexShrink: 0 }}>
-                    <rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
-                  </svg>
-                  <div className="min-w-0">
-                    <div className="text-sm font-bold truncate" style={{ color: "var(--text)" }}>{uploadName || "Choose Face Image"}</div>
-                    <div className="text-[10px]" style={{ color: "var(--text-muted)" }}>JPG, PNG, WEBP · Max 25MB</div>
-                  </div>
-                  <input type="file" accept="image/*" className="hidden"
-                    onChange={e => { const f = e.target.files?.[0]; if (f) { setUploadFile(f); setUploadName(f.name); } }} />
-                </label>
-
-                <button onClick={analyze} disabled={!uploadFile}
-                  className="grad-btn w-full flex items-center justify-center gap-2 rounded-2xl text-sm"
-                  style={{ height: 48 }}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-                  </svg>
-                  Analyze Uploaded Image
+                <button
+                  type="button"
+                  className="text-link primary disabled:opacity-40"
+                  onClick={capturePhoto}
+                  disabled={!captureEnabled}
+                  title={distanceStatus === "ok" ? "Capture" : distanceCopy[distanceStatus]}
+                >
+                  Capture {currentShot + 1}/3 →
                 </button>
               </div>
+            </footer>
+          </section>
+        </div>
+      </main>
+    );
+  }
 
-              {/* Step guide — always shown when camera is available */}
-              <div className="rounded-2xl p-4" style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}>
-                <div className="text-xs font-bold mb-3"
-                  style={{ color: "var(--text-muted)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
-                  {cameraBlocked ? "Photo tips" : "Capture guide"}
+  return (
+    <main className="clinical-page">
+      <div className="clinical-shell">
+        <Navbar />
+
+        <section className="mx-auto flex min-h-[calc(100vh-104px)] max-w-4xl flex-col justify-center py-10">
+          <div className="step-label mb-6">Step 2 of 3</div>
+          <h1 className="display-heading max-w-3xl">
+            Before we <span className="accent-italic">capture</span> your photo.
+          </h1>
+
+          <div className="mt-12 grid gap-4 md:grid-cols-2">
+            {instructions.map((item) => (
+              <div key={item.title} className="clinical-card flex gap-4 p-5">
+                <div className="mt-1 flex h-10 w-10 flex-shrink-0 items-center justify-center border" style={{ borderColor: "var(--border)", color: "var(--accent)" }}>
+                  <Icon name={item.icon} />
                 </div>
-                <div className="flex flex-col gap-3">
-                  {cameraBlocked ? (
-                    <>
-                      {["Use a clear front-facing selfie in good lighting.", "Avoid filters or heavy editing.", "Make sure your full face is visible in frame."].map((tip, i) => (
-                        <div key={i} className="flex items-start gap-3">
-                          <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black flex-shrink-0 mt-0.5"
-                            style={{ background: "var(--grad)", color: "#fff" }}>{i + 1}</div>
-                          <p className="text-xs" style={{ color: "var(--text-muted)" }}>{tip}</p>
-                        </div>
-                      ))}
-                    </>
-                  ) : (
-                    STEPS.map((s, i) => (
-                      <div key={s.label} className="flex items-start gap-3">
-                        <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black flex-shrink-0 mt-0.5"
-                          style={
-                            i < shots
-                              ? { background: "var(--green)", color: "#fff" }
-                              : i === step
-                              ? { background: "var(--grad)", color: "#fff" }
-                              : { background: "var(--bg-card2)", border: "1px solid var(--border)", color: "var(--text-muted)" }
-                          }>
-                          {i < shots ? "✓" : i + 1}
-                        </div>
-                        <div>
-                          <div className="text-xs font-bold" style={{ color: i === step ? "var(--text)" : "var(--text-muted)" }}>{s.label}</div>
-                          <div className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>{s.hint}</div>
-                        </div>
-                      </div>
-                    ))
-                  )}
+                <div>
+                  <h2 className="text-sm font-bold" style={{ color: "var(--text)" }}>{item.title}</h2>
+                  <p className="mt-2 text-sm leading-6" style={{ color: "var(--text-sub)" }}>{item.desc}</p>
                 </div>
               </div>
-
-              <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                AI screening is for guidance only. Consult a certified dermatologist for diagnosis.
-              </p>
-            </div>
-
+            ))}
           </div>
-        </div>
+
+          {error && <p className="mt-6 text-sm font-semibold" style={{ color: "var(--accent)" }}>{error}</p>}
+
+          <div className="mt-8 grid gap-4 sm:grid-cols-2">
+            <button type="button" className="clinical-card flex items-center gap-4 p-6 text-left transition hover:-translate-y-0.5" onClick={startCamera}>
+              <span className="flex h-12 w-12 items-center justify-center border" style={{ borderColor: "var(--border)", color: "var(--accent)" }}>
+                <Icon name="camera" />
+              </span>
+              <span>
+                <span className="block text-base font-bold" style={{ color: "var(--text)" }}>Use Camera</span>
+                <span className="mt-1 block text-sm" style={{ color: "var(--text-sub)" }}>Capture live</span>
+              </span>
+            </button>
+
+            <label className="clinical-card flex cursor-pointer items-center gap-4 p-6 text-left transition hover:-translate-y-0.5">
+              <span className="flex h-12 w-12 items-center justify-center border" style={{ borderColor: "var(--border)", color: "var(--accent)" }}>
+                <Icon name="upload" />
+              </span>
+              <span>
+                <span className="block text-base font-bold" style={{ color: "var(--text)" }}>Upload Photo</span>
+                <span className="mt-1 block text-sm" style={{ color: "var(--text-sub)" }}>From your device</span>
+              </span>
+              <input type="file" accept="image/*" className="hidden" onChange={(event) => uploadPhoto(event.target.files?.[0])} />
+            </label>
+          </div>
+
+          <footer className="mt-14 flex items-center justify-between border-t pt-7" style={{ borderColor: "var(--border)" }}>
+            <Link href="/onboarding" className="text-link">
+              ← Back
+            </Link>
+          </footer>
+        </section>
       </div>
-    </>
+    </main>
   );
 }

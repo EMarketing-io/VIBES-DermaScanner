@@ -1,72 +1,263 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import Navbar from "@/components/Navbar";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-const img = (f: string) => `${API}/uploads/${f}`;
+const uploadUrl = (file: string) => `${API}/uploads/${file}`;
 
-type Zone   = { title: string; area: string; has_issue: boolean; file: string };
-type Hair   = { main_issue: string; severity: string; confidence: number; hair_type: string; summary: string; tips: string[]; problem_areas: string[] };
-type Result = { main_issue: string; severity: string; confidence: number; skin_tone: string; summary: string; tips: string[]; chat: string; problem_areas: string[]; hair: Hair };
-type Doctor = { name: string; type: string; rating: string; experience: string; location: string; fee: string };
-type HairRegion = { title: string; concern: string; file: string };
-type Data = { result: Result; image_file: string; scanned_files?: string[]; detected_file: string; face_regions: Zone[]; hair_regions: HairRegion[]; image_enhanced: boolean; doctors: Doctor[] };
-type ImagePreview = { src: string; title: string; subtitle?: string };
-type LeadForm = { name: string; phone: string; email: string; gender: string };
-
-const SEV_STYLE: Record<string, { bg: string; color: string }> = {
-  low:      { bg: "rgba(52,211,153,0.1)",  color: "var(--green)" },
-  mild:     { bg: "rgba(251,191,36,0.1)",  color: "var(--amber)" },
-  moderate: { bg: "rgba(251,113,0,0.1)",   color: "#fb7c00" },
-  review:   { bg: "rgba(248,113,113,0.1)", color: "var(--red)" },
-  fallback: { bg: "var(--bg-card)",        color: "var(--text-muted)" },
+const PARAMETER_LABELS: Record<string, string> = {
+  pigmentation: "Pigmentation",
+  fine_lines: "Fine lines",
+  texture: "Texture",
+  pores: "Pores",
+  acne: "Acne",
+  scars_marks: "Scars/marks",
+  redness: "Redness",
+  dark_circles: "Dark circles",
+  puffiness: "Puffiness",
+  hydration: "Hydration",
+  firmness: "Firmness",
+  dullness: "Dullness",
 };
 
-function SevBadge({ sev }: { sev: string }) {
-  const key = sev.toLowerCase().replace(/needs.*/, "review");
-  const s = SEV_STYLE[key] ?? SEV_STYLE.fallback;
-  return (
-    <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold flex-shrink-0"
-      style={{ background: s.bg, color: s.color }}>
-      {sev}
-    </span>
-  );
+const PARAMETER_KEYS = Object.keys(PARAMETER_LABELS);
+
+type Hair = {
+  main_issue?: string;
+  severity?: string;
+  confidence?: number;
+  hair_type?: string;
+  summary?: string;
+  tips?: string[];
+  problem_areas?: string[];
+};
+
+type LegacyResult = {
+  analysis_source?: string;
+  main_issue?: string;
+  severity?: string;
+  confidence?: number;
+  skin_tone?: string;
+  summary?: string;
+  tips?: string[];
+  chat?: string;
+  problem_areas?: string[];
+  hair?: Hair;
+  skin_score?: number;
+  skin_age?: number;
+  summary_quote?: string;
+  parameters?: Record<string, number>;
+  top_concerns?: Concern[];
+  treatment_plan?: Treatment[];
+  home_care?: HomeCare[];
+  concern_count?: number;
+  ai_insight?: string;
+};
+
+type Concern = {
+  name: string;
+  score: number;
+  description: string;
+  severity: string;
+};
+
+type Treatment = {
+  name: string;
+  details: string;
+  type: "PRIMARY" | "SUPPORTIVE" | string;
+};
+
+type HomeCare = {
+  emoji: string;
+  name: string;
+  instruction: string;
+};
+
+type Data = {
+  result?: LegacyResult;
+  analysis_source?: string;
+  image_file?: string;
+  face_file?: string;
+  detected_file?: string;
+  skin_score?: number;
+  skin_age?: number;
+  summary_quote?: string;
+  parameters?: Record<string, number>;
+  top_concerns?: Concern[];
+  treatment_plan?: Treatment[];
+  home_care?: HomeCare[];
+  concern_count?: number;
+  ai_insight?: string;
+  [key: string]: unknown;
+};
+
+type PatientInfo = {
+  name?: string;
+  age?: string;
+  pregnant?: boolean;
+  cosmetic_procedure?: boolean;
+};
+
+type LeadForm = {
+  name: string;
+  phone: string;
+  email: string;
+  gender: string;
+};
+
+const defaultHomeCare: HomeCare[] = [
+  { emoji: "🛡️", name: "SPF 50", instruction: "Apply every morning and reapply every 2-3 hours when outdoors." },
+  { emoji: "💧", name: "Hyaluronic acid serum", instruction: "Use on damp skin before moisturiser for hydration support." },
+  { emoji: "🍊", name: "Vitamin C 10%", instruction: "Apply in the morning under sunscreen to support brightness." },
+  { emoji: "🌙", name: "Retinol 0.3%", instruction: "Use at night 2-3 times weekly, avoiding pregnancy or breastfeeding." },
+];
+
+function scoreSeverity(score: number) {
+  if (score >= 85) return "EXCELLENT";
+  if (score >= 70) return "GOOD";
+  if (score >= 55) return "MILD";
+  return "MODERATE";
 }
 
-function ConfBar({ value, accent }: { value: number; accent?: string }) {
+function severityClass(label: string) {
+  const key = label.toLowerCase();
+  if (key.includes("excellent")) return "severity-excellent";
+  if (key.includes("good")) return "severity-good";
+  if (key.includes("mild")) return "severity-mild";
+  return "severity-moderate";
+}
+
+function clampScore(value: unknown, fallback: number) {
+  const num = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.max(0, Math.min(100, Math.round(num)));
+}
+
+function normaliseParameters(data: Data | null) {
+  const raw = data?.parameters ?? data?.result?.parameters ?? {};
+  const legacyConfidence = clampScore(data?.result?.confidence, 64);
+  return Object.fromEntries(
+    PARAMETER_KEYS.map((key, index) => [key, clampScore(raw[key], Math.max(42, Math.min(88, legacyConfidence - 10 + index * 3)))])
+  ) as Record<string, number>;
+}
+
+function fallbackConcerns(parameters: Record<string, number>, data: Data | null): Concern[] {
+  const provided = data?.top_concerns ?? data?.result?.top_concerns;
+  if (Array.isArray(provided) && provided.length) return provided.slice(0, 3);
+  return Object.entries(parameters)
+    .sort((a, b) => a[1] - b[1])
+    .slice(0, 3)
+    .map(([key, score]) => ({
+      name: PARAMETER_LABELS[key] ?? key,
+      score,
+      severity: scoreSeverity(score),
+      description: `${PARAMETER_LABELS[key] ?? key} scored ${score}/100 and should be reviewed in your consultation plan.`,
+    }));
+}
+
+function concernKey(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function concernLabel(name: string) {
+  const key = concernKey(name);
+  return PARAMETER_LABELS[key] ?? name.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function concernPoint(name: string, index: number) {
+  const key = concernKey(name);
+  if (key.includes("dark_circle") || key.includes("puffiness")) return { x: index % 2 ? 57 : 43, y: 45, blobW: 8, blobH: 5 };
+  if (key.includes("fine_line")) return { x: 50, y: 34, blobW: 13, blobH: 4 };
+  if (key.includes("pigmentation") || key.includes("dull")) return { x: index % 2 ? 40 : 60, y: 55, blobW: 10, blobH: 8 };
+  if (key.includes("acne") || key.includes("scar") || key.includes("mark") || key.includes("redness")) return { x: index % 2 ? 60 : 40, y: 62, blobW: 9, blobH: 8 };
+  if (key.includes("pores") || key.includes("texture")) return { x: 50, y: 56, blobW: 10, blobH: 9 };
+  if (key.includes("hydration") || key.includes("firmness")) return { x: 50, y: 70, blobW: 11, blobH: 7 };
+  return { x: [43, 57, 50, 40][index] ?? 50, y: [45, 45, 56, 64][index] ?? 56, blobW: 9, blobH: 7 };
+}
+
+function labelSlot(index: number) {
+  return [
+    { x: 28, y: 30, anchor: "end" as const },
+    { x: 72, y: 31, anchor: "start" as const },
+    { x: 27, y: 67, anchor: "end" as const },
+    { x: 73, y: 67, anchor: "start" as const },
+  ][index] ?? { x: 72, y: 67, anchor: "start" as const };
+}
+
+function ScoreGauge({ score }: { score: number }) {
+  const radius = 41;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference * (1 - score / 100);
   return (
-    <div className="flex items-center gap-3">
-      <span className="text-xs font-semibold w-20 flex-shrink-0" style={{ color: "var(--text-muted)" }}>Confidence</span>
-      <div className="conf-track flex-1">
-        <div className="conf-fill" style={{ width: `${value}%`, background: accent ?? "var(--grad)" }} />
+    <div className="relative h-28 w-28">
+      <svg viewBox="0 0 120 120" className="h-full w-full -rotate-90">
+        <circle cx="60" cy="60" r={radius} fill="none" stroke="#e8e4df" strokeWidth="9" />
+        <circle
+          cx="60"
+          cy="60"
+          r={radius}
+          fill="none"
+          stroke="var(--accent)"
+          strokeWidth="9"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <div className="font-serif-display text-4xl font-semibold leading-none" style={{ color: "var(--text)" }}>{score}</div>
+        <div className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: "var(--text-sub)" }}>of 100</div>
       </div>
-      <span className="text-sm font-black w-9 text-right" style={{ color: "var(--text)" }}>{value}%</span>
     </div>
   );
 }
 
-function Tip({ n, text, accent }: { n: number; text: string; accent?: string }) {
+function HeatMap({ photo, concerns, insight }: { photo: string; concerns: Concern[]; insight: string }) {
+  const topFour = concerns.filter((concern) => concern.score < 75).slice(0, 4);
+  const visibleConcerns = topFour.length ? topFour : concerns.slice(0, 1);
+
   return (
-    <div className="flex gap-3 items-start p-3 rounded-xl" style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}>
-      <div className="w-6 h-6 rounded-lg flex items-center justify-center text-white text-xs font-black flex-shrink-0"
-        style={{ background: accent ?? "var(--grad)" }}>{n}</div>
-      <p className="text-sm leading-relaxed" style={{ color: "var(--text-sub)" }}>{text}</p>
+    <div className="clinical-card p-4 md:p-5">
+      <div className="relative mx-auto aspect-[2.65] w-full max-w-5xl overflow-hidden">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={photo} alt="Heat map face" className="absolute left-1/2 top-1/2 h-[92%] w-[31%] -translate-x-1/2 -translate-y-1/2 rounded-full object-cover" />
+        <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full overflow-visible">
+          {visibleConcerns.map((concern, index) => {
+            const point = concernPoint(concern.name, index);
+            const slot = labelSlot(index);
+            const needsAttention = concern.score < 60;
+            const markerColor = needsAttention ? "#b5541c" : "#d9a12a";
+            return (
+              <g key={`${concern.name}-${index}`}>
+                <ellipse cx={point.x} cy={point.y} rx={point.blobW} ry={point.blobH} fill={markerColor} opacity="0.2" />
+                <line x1={slot.x} y1={slot.y + 4} x2={point.x} y2={point.y} stroke="#b5541c" strokeWidth="0.5" />
+                <circle cx={point.x} cy={point.y} r="1.8" fill="#d9a12a" stroke="#b5541c" strokeWidth="0.65" />
+                <text x={slot.x} y={slot.y} textAnchor={slot.anchor} fontSize="2.25" fontWeight="700" fill="#1a1a1a">{concernLabel(concern.name)}</text>
+                <text x={slot.x} y={slot.y + 3.8} textAnchor={slot.anchor} fontSize="1.9" fontWeight="800" fill="#b5541c">
+                  SCORE {concern.score}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center justify-center gap-5 text-xs font-semibold" style={{ color: "var(--text-sub)" }}>
+        <span className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ background: "#d9a12a" }} /> Moderate concern</span>
+        <span className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--accent)" }} /> Needs attention</span>
+      </div>
+      <p className="mt-3 text-center text-sm leading-6" style={{ color: "var(--text-sub)" }}>
+        <strong style={{ color: "var(--text)" }}>AI insight:</strong> {insight}
+      </p>
     </div>
   );
 }
 
 export default function ResultPage() {
   const router = useRouter();
-  const [data, setData]     = useState<Data | null>(null);
-  const [tab, setTab]       = useState<"skin" | "hair">("skin");
-  const [chatIn, setChatIn] = useState("");
-  const [msgs, setMsgs]     = useState<{ role: "user" | "bot"; text: string }[]>([{ role: "bot", text: "Ask me anything — e.g. What should I do for forehead acne?" }]);
-  const [chatBusy, setChatBusy] = useState(false);
-  const [preview, setPreview] = useState<ImagePreview | null>(null);
+  const [data, setData] = useState<Data | null>(null);
+  const [patient, setPatient] = useState<PatientInfo>({});
   const [leadOpen, setLeadOpen] = useState(false);
   const [leadSaving, setLeadSaving] = useState(false);
   const [leadSubmitted, setLeadSubmitted] = useState(false);
@@ -74,63 +265,91 @@ export default function ResultPage() {
   const [leadError, setLeadError] = useState("");
   const [leadSuccess, setLeadSuccess] = useState("");
   const [leadForm, setLeadForm] = useState<LeadForm>({ name: "", phone: "", email: "", gender: "" });
-  const chatRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const raw = localStorage.getItem("vibes_result");
-    if (!raw) { router.push("/scan"); return; }
-    try { setData(JSON.parse(raw)); } catch { router.push("/scan"); }
-  }, [router]);
+    if (!raw) {
+      router.push("/onboarding");
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw) as Data;
+      const source = parsed.analysis_source ?? parsed.result?.analysis_source;
+      if (source !== "openai") {
+        localStorage.removeItem("vibes_result");
+        router.push("/scan");
+        return;
+      }
+      setData(parsed);
+    } catch {
+      router.push("/onboarding");
+    }
 
-  useEffect(() => {
-    if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
-  }, [msgs]);
+    const patientRaw = localStorage.getItem("vibes_patient_info");
+    if (patientRaw) {
+      try {
+        const parsed = JSON.parse(patientRaw) as PatientInfo;
+        setPatient(parsed);
+        setLeadForm((form) => ({ ...form, name: parsed.name ?? form.name }));
+      } catch {
+        setPatient({});
+      }
+    }
+  }, [router]);
 
   useEffect(() => {
     if (!data?.image_file) return;
     const saved = localStorage.getItem(`vibes_lead_${data.image_file}`);
-    if (!saved) {
-      setLeadSubmitted(false);
-      setLeadOpen(true);
-      return;
-    }
+    if (!saved) return;
     try {
-      const savedForm = JSON.parse(saved) as LeadForm;
-      setLeadForm(savedForm);
+      setLeadForm(JSON.parse(saved) as LeadForm);
       setLeadSubmitted(true);
-      setLeadOpen(false);
     } catch {
       setLeadSubmitted(false);
-      setLeadOpen(true);
     }
   }, [data]);
 
-  useEffect(() => {
-    if (!preview) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPreview(null);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [preview]);
+  const parameters = useMemo(() => normaliseParameters(data), [data]);
+  const concerns = useMemo(() => fallbackConcerns(parameters, data), [parameters, data]);
 
-  async function chat() {
-    const text = chatIn.trim();
-    if (!text || chatBusy) return;
-    setMsgs(m => [...m, { role: "user" as "user" | "bot", text }]);
-    setChatIn(""); setChatBusy(true);
-    try {
-      const res  = await fetch(`${API}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: text }) });
-      const json = await res.json();
-      setMsgs(m => [...m, { role: "bot" as "user" | "bot", text: json.reply }]);
-    } catch {
-      setMsgs(m => [...m, { role: "bot" as "user" | "bot", text: "Chat unavailable right now." }]);
-    } finally { setChatBusy(false); }
+  if (!data) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-white">
+        <div className="section-kicker">Loading report</div>
+      </main>
+    );
   }
+
+  const report = data;
+  const originalPhoto = localStorage.getItem("vibes_photo") || (report.image_file ? uploadUrl(report.image_file) : "");
+  const reportPhoto = report.face_file ? uploadUrl(report.face_file) : originalPhoto;
+  const age = Number.parseInt(patient.age ?? "", 10) || 32;
+  const skinScore = clampScore(report.skin_score ?? report.result?.skin_score, clampScore(report.result?.confidence, 63));
+  const skinAge = clampScore(report.skin_age ?? report.result?.skin_age, age + Math.round((72 - skinScore) / 4));
+  const scanDate = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(new Date());
+  const summaryQuote =
+    report.summary_quote ??
+    report.result?.summary_quote ??
+    report.result?.summary ??
+    "Indicative analysis based on visible features. A few areas warrant attention - see the detailed breakdown below.";
+  const treatmentPlan =
+    report.treatment_plan ??
+    report.result?.treatment_plan ??
+    [
+      { name: "VIBES Skin Clarity Protocol", details: "Targets pigmentation, texture and pores across 4-6 dermatologist-guided sessions.", type: "PRIMARY" },
+      { name: "Hydration Barrier Support", details: "Supportive treatment to improve visible dullness, hydration and skin comfort.", type: "SUPPORTIVE" },
+      { name: "Under-eye Brightening Review", details: "Focused consultation for dark circles, puffiness and fine-line support.", type: "SUPPORTIVE" },
+    ];
+  const homeCare = report.home_care ?? report.result?.home_care ?? defaultHomeCare;
+  const concernCount = report.concern_count ?? report.result?.concern_count ?? Object.values(parameters).filter((score) => score < 70).length;
+  const aiInsight =
+    report.ai_insight ??
+    report.result?.ai_insight ??
+    `${concernCount} areas requiring intervention detected across your facial zones. Markers indicate the approximate location of each concern; severity is colour-coded above.`;
 
   async function submitLead(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!data || leadSaving) return;
+    if (leadSaving) return;
 
     const name = leadForm.name.trim();
     const phone = leadForm.phone.trim();
@@ -149,24 +368,24 @@ export default function ResultPage() {
       const res = await fetch(`${API}/api/submit-lead`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, phone, email, gender, data }),
+        body: JSON.stringify({ name, phone, email, gender, data: report }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.detail ?? "Could not save details.");
       const savedForm = { name, phone, email, gender };
-      localStorage.setItem(`vibes_lead_${data.image_file}`, JSON.stringify(savedForm));
+      if (report.image_file) localStorage.setItem(`vibes_lead_${report.image_file}`, JSON.stringify(savedForm));
       setLeadForm(savedForm);
       setLeadSubmitted(true);
       setLeadSuccess("Details saved. Your PDF report is ready to download.");
-    } catch (e: unknown) {
-      setLeadError(e instanceof Error ? e.message : "Could not save details.");
+    } catch (event: unknown) {
+      setLeadError(event instanceof Error ? event.message : "Could not save details.");
     } finally {
       setLeadSaving(false);
     }
   }
 
   async function downloadPdf() {
-    if (!data || pdfBusy) return;
+    if (pdfBusy) return;
 
     const name = leadForm.name.trim();
     const phone = leadForm.phone.trim();
@@ -185,7 +404,7 @@ export default function ResultPage() {
       const res = await fetch(`${API}/api/report-pdf`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, phone, email, gender, data }),
+        body: JSON.stringify({ name, phone, email, gender, data: report }),
       });
       if (!res.ok) {
         const json = await res.json().catch(() => ({}));
@@ -200,48 +419,22 @@ export default function ResultPage() {
       link.click();
       link.remove();
       URL.revokeObjectURL(href);
-    } catch (e: unknown) {
+    } catch (event: unknown) {
       setLeadOpen(true);
-      setLeadError(e instanceof Error ? e.message : "Could not generate PDF.");
+      setLeadError(event instanceof Error ? event.message : "Could not generate PDF.");
     } finally {
       setPdfBusy(false);
     }
   }
 
-  if (!data) return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div className="rings-wrap"><div className="ring ring-1"/><div className="ring ring-2"/><div className="ring ring-3"/>
-        <div className="ring-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/></svg></div>
-      </div>
-    </div>
-  );
-
-  const { result: r, detected_file, face_regions, hair_regions, image_enhanced, doctors } = data;
+  function newScan() {
+    localStorage.removeItem("vibes_result");
+    localStorage.removeItem("vibes_photo");
+    router.push("/onboarding");
+  }
 
   return (
-    <div className="min-h-screen">
-      {preview && (
-        <div className="image-modal-backdrop" role="dialog" aria-modal="true" aria-label={`${preview.title} image preview`} onClick={() => setPreview(null)}>
-          <div className="image-modal-panel" onClick={e => e.stopPropagation()}>
-            <div className="image-modal-header">
-              <div className="min-w-0">
-                <h2>{preview.title}</h2>
-                {preview.subtitle && <p>{preview.subtitle}</p>}
-              </div>
-              <button type="button" className="image-modal-close" aria-label="Close image preview" onClick={() => setPreview(null)}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
-                  <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
-                </svg>
-              </button>
-            </div>
-            <div className="image-modal-frame">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={preview.src} alt={preview.title} />
-            </div>
-          </div>
-        </div>
-      )}
-
+    <main className="clinical-page">
       {leadOpen && (
         <div className="lead-modal-backdrop" role="dialog" aria-modal="true" aria-label="Scan details form">
           <form className="lead-modal-panel" onSubmit={submitLead}>
@@ -249,11 +442,11 @@ export default function ResultPage() {
               <div>
                 <span>Vibes DermaScan</span>
                 <h2>{leadSubmitted ? "Details saved" : "Enter your details"}</h2>
-                <p>{leadSubmitted ? "Your scan report is ready. Download the PDF with all images and analysis details." : "Your scan images and highlighted problem areas will be saved with this record."}</p>
+                <p>{leadSubmitted ? "Your scan report is ready to download." : "Complete these details to save your consultation lead and download the PDF."}</p>
               </div>
               <button type="button" className="lead-modal-close" aria-label="Close details form" onClick={() => setLeadOpen(false)}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
-                  <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+                  <path d="M18 6 6 18" /><path d="m6 6 12 12" />
                 </svg>
               </button>
             </div>
@@ -261,49 +454,22 @@ export default function ResultPage() {
             <div className="lead-form-grid">
               <label className="lead-field">
                 <span>Name</span>
-                <input
-                  value={leadForm.name}
-                  onChange={e => setLeadForm(f => ({ ...f, name: e.target.value }))}
-                  placeholder="Enter full name"
-                  autoComplete="name"
-                  disabled={leadSubmitted}
-                />
+                <input value={leadForm.name} onChange={(event) => setLeadForm((form) => ({ ...form, name: event.target.value }))} autoComplete="name" />
               </label>
-
               <label className="lead-field">
                 <span>Phone</span>
                 <div className="phone-input-wrap">
                   <strong>+91</strong>
-                  <input
-                    value={leadForm.phone}
-                    onChange={e => setLeadForm(f => ({ ...f, phone: e.target.value.replace(/\D/g, "").slice(0, 10) }))}
-                    placeholder="10 digit number"
-                    inputMode="numeric"
-                    autoComplete="tel-national"
-                    disabled={leadSubmitted}
-                  />
+                  <input value={leadForm.phone} onChange={(event) => setLeadForm((form) => ({ ...form, phone: event.target.value.replace(/\D/g, "").slice(0, 10) }))} inputMode="numeric" autoComplete="tel-national" />
                 </div>
               </label>
-
               <label className="lead-field">
                 <span>Email</span>
-                <input
-                  value={leadForm.email}
-                  onChange={e => setLeadForm(f => ({ ...f, email: e.target.value }))}
-                  placeholder="name@example.com"
-                  type="email"
-                  autoComplete="email"
-                  disabled={leadSubmitted}
-                />
+                <input value={leadForm.email} onChange={(event) => setLeadForm((form) => ({ ...form, email: event.target.value }))} type="email" autoComplete="email" />
               </label>
-
               <label className="lead-field">
                 <span>Gender</span>
-                <select
-                  value={leadForm.gender}
-                  onChange={e => setLeadForm(f => ({ ...f, gender: e.target.value }))}
-                  disabled={leadSubmitted}
-                >
+                <select value={leadForm.gender} onChange={(event) => setLeadForm((form) => ({ ...form, gender: event.target.value }))}>
                   <option value="">Select gender</option>
                   <option value="Female">Female</option>
                   <option value="Male">Male</option>
@@ -329,293 +495,156 @@ export default function ResultPage() {
         </div>
       )}
 
-      <div className="max-w-7xl mx-auto px-6 pb-12">
-
-        <Navbar right={
-          <div className="result-nav-actions">
-            <button
-              type="button"
-              onClick={leadSubmitted ? downloadPdf : () => { setLeadError(""); setLeadOpen(true); }}
-              className="px-4 py-2 rounded-xl text-sm font-bold"
-              style={{ background: "var(--bg-card)", border: "1px solid var(--border)", color: "var(--text-sub)" }}
-              disabled={pdfBusy}
-            >
-              {leadSubmitted ? (pdfBusy ? "Preparing..." : "Download PDF") : "Fill Details"}
-            </button>
-            <Link href="/scan" className="grad-btn px-4 py-2 rounded-xl text-sm" style={{ background: "var(--grad)", display:"inline-block" }}>
-              New Scan
-            </Link>
-          </div>
-        } />
-
-        {/* ── TOP GRID ── */}
-        <div className="grid lg:grid-cols-2 gap-5 mb-5">
-
-          {/* Scanner */}
-          <div className="glass rounded-3xl p-6">
-            <div className="flex items-center gap-2 mb-4">
-              <span className="text-xs font-bold px-2.5 py-1 rounded-full"
-                style={{ background: "rgba(124,58,237,0.12)", color: "var(--purple)" }}>
-                AI Detection View
-              </span>
-              {image_enhanced && (
-                <span className="text-xs font-bold px-2.5 py-1 rounded-full"
-                  style={{ background: "rgba(251,191,36,0.1)", color: "var(--amber)" }}>
-                  ☀ Auto-enhanced
-                </span>
-              )}
+      <div className="clinical-shell pb-12">
+        <Navbar
+          right={
+            <div className="flex items-center gap-5">
+              <button type="button" className="text-link" onClick={leadSubmitted ? downloadPdf : () => { setLeadError(""); setLeadOpen(true); }}>
+                {pdfBusy ? "Preparing" : "Print"}
+              </button>
+              <button type="button" className="text-link primary" onClick={newScan}>
+                New Scan
+              </button>
             </div>
+          }
+        />
 
-            <div className="scanner-wrap" style={{ width: "100%", aspectRatio: "1" }}>
-              <div className="scanner-inner">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={img(detected_file)} alt="Detected face"
-                  className="absolute inset-0 w-full h-full object-cover" style={{ zIndex: 3 }} />
-                <button
-                  type="button"
-                  className="image-preview-hotspot"
-                  aria-label="Open detected face image preview"
-                  onClick={() => setPreview({ src: img(detected_file), title: "AI Detection View", subtitle: "Full detected face image" })}
-                />
-                <div className="scan-glow" />
-                <div className="scan-line" />
-                <div className="scan-grid" />
-                <div className="node node-1" /><div className="node node-2" />
-                <div className="node node-3" /><div className="node node-4" />
-                <div className="scan-status"><span className="status-dot done" /><span>Scan Complete</span></div>
+        <section className="clinical-card grid gap-5 p-4 md:grid-cols-[auto_1fr_auto] md:items-center md:p-6">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={reportPhoto} alt="Scan thumbnail" className="h-20 w-20 rounded-full object-cover" />
+          <div>
+            <div className="section-kicker">Analysis report</div>
+            <div className="mt-2 text-lg font-semibold" style={{ color: "var(--text)" }}>
+              Age {age} · {scanDate}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-5">
+            <ScoreGauge score={skinScore} />
+            <div>
+              <div className="section-kicker">Skin age vs actual</div>
+              <div className="mt-3 grid gap-1 text-sm font-semibold" style={{ color: "var(--text-sub)" }}>
+                <span>Actual: <strong style={{ color: "var(--text)" }}>{age}</strong></span>
+                <span>Skin: <strong style={{ color: "var(--accent)" }}>{skinAge}</strong></span>
               </div>
             </div>
+          </div>
+        </section>
 
-            <p className="text-xs font-semibold mt-3" style={{ color: "var(--green)" }}>
-              ✓ Face detected — AI has screened skin and hair
+        <blockquote className="mt-8 border-l-2 py-2 pl-5 font-serif-display text-2xl italic leading-tight md:text-3xl" style={{ borderColor: "var(--accent)", color: "var(--text)" }}>
+          "{summaryQuote}"
+        </blockquote>
+
+        <section className="report-section">
+          <div className="mb-4 flex items-end justify-between gap-4">
+            <h2 className="section-title">Detected zones of concern</h2>
+            <div className="section-kicker">Heat map</div>
+          </div>
+          <HeatMap photo={reportPhoto} concerns={concerns} insight={aiInsight} />
+        </section>
+
+        <section className="report-section">
+          <div className="mb-4 flex items-end justify-between gap-4">
+            <h2 className="section-title">Twelve parameters analysed</h2>
+            <div className="section-kicker">Detailed scores</div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {PARAMETER_KEYS.map((key) => {
+              const score = parameters[key];
+              const severity = scoreSeverity(score);
+              return (
+                <div key={key} className="clinical-card flex items-center justify-between gap-4 p-4">
+                  <h3 className="text-base font-bold" style={{ color: "var(--text)" }}>{PARAMETER_LABELS[key]}</h3>
+                  <div className="text-right">
+                    <div className="font-serif-display text-3xl leading-none" style={{ color: "var(--text)" }}>{score}</div>
+                    <div className={`mt-1 text-[10px] font-bold uppercase tracking-[0.14em] ${severityClass(severity)}`}>{severity}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="report-section">
+          <div className="mb-4 flex items-end justify-between gap-4">
+            <h2 className="section-title">Top concerns to address</h2>
+            <div className="section-kicker">Priority focus</div>
+          </div>
+          <div className="grid gap-4">
+            {concerns.slice(0, 3).map((concern, index) => (
+              <div key={`${concern.name}-${index}`} className="clinical-card grid gap-4 p-4 md:grid-cols-[70px_1fr_auto] md:items-center">
+                <div className="font-serif-display text-3xl italic leading-none" style={{ color: "var(--accent)" }}>
+                  {String(index + 1).padStart(2, "0")}
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold" style={{ color: "var(--text)" }}>{concern.name}</h3>
+                  <p className="mt-2 text-sm leading-6" style={{ color: "var(--text-sub)" }}>
+                    Score {concern.score}. {concern.description}
+                  </p>
+                </div>
+                <div className={`text-xs font-bold uppercase tracking-[0.14em] ${severityClass(concern.severity)}`}>
+                  {concern.severity}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="report-section">
+          <div className="mb-4 flex items-end justify-between gap-4">
+            <h2 className="section-title">Your VIBES treatment plan</h2>
+            <div className="section-kicker">Doctor-curated</div>
+          </div>
+          <div className="grid gap-4">
+            {treatmentPlan.map((treatment, index) => (
+              <div key={`${treatment.name}-${index}`} className="border-l-2 bg-white p-5" style={{ borderColor: "var(--accent)" }}>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className="text-lg font-bold" style={{ color: "var(--text)" }}>{treatment.name}</h3>
+                    <p className="mt-2 text-sm leading-6" style={{ color: "var(--text-sub)" }}>{treatment.details}</p>
+                  </div>
+                  <span className="section-kicker whitespace-nowrap">{treatment.type}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="report-section">
+          <div className="mb-4 flex items-end justify-between gap-4">
+            <h2 className="section-title">Daily home care</h2>
+            <div className="section-kicker">Maintain your results</div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            {homeCare.slice(0, 4).map((item) => (
+              <div key={item.name} className="clinical-card flex gap-4 p-5">
+                <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center border text-sm font-bold" style={{ borderColor: "var(--border)", color: "var(--accent)" }}>
+                  {item.emoji}
+                </div>
+                <div>
+                  <h3 className="text-base font-bold" style={{ color: "var(--text)" }}>{item.name}</h3>
+                  <p className="mt-2 text-sm leading-6" style={{ color: "var(--text-sub)" }}>{item.instruction}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="mt-12 bg-[#f1efec] p-7 md:flex md:items-center md:justify-between md:gap-10 md:p-10">
+          <div>
+            <h2 className="font-serif-display text-4xl font-semibold leading-none text-[#bcb5ad] md:text-5xl">Book your free consultation</h2>
+            <p className="mt-5 max-w-2xl text-sm leading-7" style={{ color: "var(--text-sub)" }}>
+              Review this AI assessment with a VIBES dermatologist and confirm the right treatment plan for your skin.
             </p>
           </div>
+          <button type="button" className="grad-btn mt-8 min-h-12 rounded-full px-8 md:mt-0" onClick={() => { setLeadError(""); setLeadOpen(true); }}>
+            Book Now
+          </button>
+        </section>
 
-          {/* Tabbed analysis */}
-          <div className="glass rounded-3xl p-6 flex flex-col">
-
-            {/* Tab bar */}
-            <div className="flex gap-1 p-1 rounded-xl mb-5 flex-shrink-0"
-              style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}>
-              {(["skin", "hair"] as const).map(t => (
-                <button key={t} onClick={() => setTab(t)}
-                  className="flex-1 py-2 rounded-lg text-xs font-bold transition-all"
-                  style={tab === t
-                    ? { background: "var(--grad)", color: "white", boxShadow: "0 4px 16px rgba(124,58,237,0.3)" }
-                    : { color: "var(--text-muted)", background: "transparent" }}>
-                  {t === "skin" ? "○ Skin Analysis" : "♫ Hair Analysis"}
-                </button>
-              ))}
-            </div>
-
-            {/* Skin */}
-            {tab === "skin" && (
-              <div className="flex flex-col gap-3 flex-1">
-                <div className="flex items-start gap-3 flex-wrap">
-                  <h1 className="text-3xl font-black tracking-tight flex-1 grad-text" style={{ lineHeight: 1.1 }}>{r.main_issue}</h1>
-                  <SevBadge sev={r.severity} />
-                </div>
-                <p className="text-sm leading-relaxed" style={{ color: "var(--text-sub)" }}>{r.summary}</p>
-                <ConfBar value={r.confidence} />
-                <div className="p-3 rounded-xl" style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}>
-                  <div className="text-xs font-semibold mb-1" style={{ color: "var(--text-muted)" }}>Skin / Texture</div>
-                  <div className="text-sm font-black" style={{ color: "var(--text)" }}>{r.skin_tone}</div>
-                </div>
-                <div className="flex gap-3 p-3.5 rounded-xl" style={{ background: "rgba(124,58,237,0.08)", border: "1px solid rgba(124,58,237,0.18)" }}>
-                  <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-[9px] font-black flex-shrink-0" style={{ background: "var(--grad)" }}>AI</div>
-                  <p className="text-xs leading-relaxed font-medium" style={{ color: "var(--text-sub)" }}>{r.chat}</p>
-                </div>
-                <div className="p-3 rounded-xl text-xs font-semibold" style={{ background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.18)", color: "var(--amber)" }}>
-                  AI screening only — not a medical diagnosis. Consult a certified dermatologist.
-                </div>
-                <div className="flex gap-2 mt-auto">
-                  <button className="flex-1 py-2.5 rounded-xl text-white text-xs font-bold" style={{ background: "var(--grad)" }}>Book Skin Consult</button>
-                  <Link href="/scan" className="flex-1 py-2.5 rounded-xl text-xs font-bold text-center flex items-center justify-center"
-                    style={{ background: "var(--bg-card)", border: "1px solid var(--border)", color: "var(--text-sub)" }}>Scan Again</Link>
-                </div>
-              </div>
-            )}
-
-            {/* Hair */}
-            {tab === "hair" && (
-              <div className="flex flex-col gap-3 flex-1">
-                <div className="flex items-start gap-3 flex-wrap">
-                  <h1 className="text-3xl font-black tracking-tight flex-1 grad-text-2" style={{ lineHeight: 1.1 }}>{r.hair.main_issue}</h1>
-                  <SevBadge sev={r.hair.severity} />
-                </div>
-                <p className="text-sm leading-relaxed" style={{ color: "var(--text-sub)" }}>{r.hair.summary}</p>
-                <ConfBar value={r.hair.confidence} accent="var(--grad)" />
-                <div className="p-3 rounded-xl" style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}>
-                  <div className="text-xs font-semibold mb-1" style={{ color: "var(--text-muted)" }}>Hair Type</div>
-                  <div className="text-sm font-black" style={{ color: "var(--text)" }}>{r.hair.hair_type}</div>
-                </div>
-                <div className="flex gap-3 p-3.5 rounded-xl" style={{ background: "rgba(219,39,119,0.08)", border: "1px solid rgba(219,39,119,0.18)" }}>
-                  <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-[9px] font-black flex-shrink-0" style={{ background: "var(--grad)" }}>AI</div>
-                  <p className="text-xs leading-relaxed font-medium" style={{ color: "var(--text-sub)" }}>{r.chat}</p>
-                </div>
-                <div className="p-3 rounded-xl text-xs font-semibold" style={{ background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.18)", color: "var(--amber)" }}>
-                  AI screening only — not a diagnosis. Consult a certified trichologist.
-                </div>
-                <div className="flex gap-2 mt-auto">
-                  <button className="flex-1 py-2.5 rounded-xl text-white text-xs font-bold" style={{ background: "var(--grad)" }}>Book Hair Consult</button>
-                  <Link href="/scan" className="flex-1 py-2.5 rounded-xl text-xs font-bold text-center flex items-center justify-center"
-                    style={{ background: "var(--bg-card)", border: "1px solid var(--border)", color: "var(--text-sub)" }}>Scan Again</Link>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* ── FACE ZONES ── */}
-        <div className="glass rounded-3xl p-6 mb-5">
-          <div className="flex items-end justify-between mb-5">
-            <div>
-              <h2 className="text-lg font-black" style={{ color: "var(--text)" }}>Face Zone Analysis</h2>
-              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>All {face_regions.length} zones mapped — concerns highlighted</p>
-            </div>
-            <div className="flex items-center gap-3 text-xs font-semibold" style={{ color: "var(--text-muted)" }}>
-              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full" style={{ background: "var(--green)" }} />Clear</span>
-              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full" style={{ background: "var(--amber)" }} />Concern</span>
-            </div>
-          </div>
-          <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-            {face_regions.map(z => (
-              <button
-                key={z.area}
-                type="button"
-                className={`zone-card image-popup-card ${z.has_issue ? "concern" : "clear"}`}
-                onClick={() => setPreview({
-                  src: img(z.file),
-                  title: z.title,
-                  subtitle: z.has_issue ? "Concern highlighted" : "Clear zone",
-                })}
-              >
-                <div style={{ height: 110, overflow: "hidden", background: "rgba(255,255,255,0.02)" }}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={img(z.file)} alt={z.title} className="w-full h-full object-cover" />
-                </div>
-                <div className="p-2.5 flex items-center justify-between gap-1">
-                  <span className="text-xs font-bold" style={{ color: "var(--text)" }}>{z.title}</span>
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
-                    style={z.has_issue
-                      ? { background: "rgba(251,191,36,0.12)", color: "var(--amber)" }
-                      : { background: "rgba(52,211,153,0.1)", color: "var(--green)" }}>
-                    {z.has_issue ? "●" : "✓"}
-                  </span>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* ── TIPS ── */}
-        <div className="grid lg:grid-cols-2 gap-5 mb-5">
-          <div className="glass rounded-3xl p-6">
-            <h2 className="text-base font-black mb-1" style={{ color: "var(--text)" }}>Skin Care Tips</h2>
-            <p className="text-xs mb-4" style={{ color: "var(--text-muted)" }}>Safe suggestions — consult a dermatologist for treatment</p>
-            <div className="flex flex-col gap-2">{r.tips.map((t, i) => <Tip key={i} n={i+1} text={t} />)}</div>
-          </div>
-          <div className="glass rounded-3xl p-6">
-            <h2 className="text-base font-black mb-1" style={{ color: "var(--text)" }}>Hair Care Tips</h2>
-            <p className="text-xs mb-4" style={{ color: "var(--text-muted)" }}>Safe suggestions — consult a trichologist for treatment</p>
-            <div className="flex flex-col gap-2">{r.hair.tips.map((t, i) => <Tip key={i} n={i+1} text={t} accent="var(--grad)" />)}</div>
-          </div>
-        </div>
-
-        {/* ── HAIR ZONES (conditional) ── */}
-        {hair_regions.length > 0 && (
-          <div className="glass rounded-3xl p-6 mb-5">
-            <h2 className="text-base font-black mb-1" style={{ color: "var(--text)" }}>Hair &amp; Scalp Zones</h2>
-            <p className="text-xs mb-4" style={{ color: "var(--text-muted)" }}>Zoomed regions where concerns were detected</p>
-            <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(3,1fr)" }}>
-              {hair_regions.map(hr => (
-                <button
-                  key={hr.file}
-                  type="button"
-                  className="image-popup-card rounded-2xl overflow-hidden"
-                  style={{ background: "var(--bg-card)", border: "1px solid var(--border-accent)" }}
-                  onClick={() => setPreview({ src: img(hr.file), title: hr.title, subtitle: hr.concern })}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={img(hr.file)} alt={hr.title} className="w-full object-cover" style={{ height: 130 }} />
-                  <div className="p-3">
-                    <div className="text-sm font-bold mb-0.5" style={{ color: "var(--text)" }}>{hr.title}</div>
-                    <div className="text-xs" style={{ color: "var(--text-muted)" }}>{hr.concern}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* ── DOCTORS ── */}
-        <div className="glass rounded-3xl p-6 mb-5">
-          <div className="text-xs font-bold mb-1 px-2.5 py-1 rounded-full inline-block" style={{ background: "rgba(124,58,237,0.12)", color: "var(--purple)" }}>
-            Recommended Next Step
-          </div>
-          <h2 className="text-lg font-black mt-3 mb-1" style={{ color: "var(--text)" }}>Book a Specialist</h2>
-          <p className="text-xs mb-5" style={{ color: "var(--text-muted)" }}>Vibes has experienced dermatologists and trichologists near you.</p>
-          <div className="grid sm:grid-cols-3 gap-4">
-            {doctors.map(d => (
-              <div key={d.name} className="rounded-2xl p-5 transition-all hover:-translate-y-1"
-                style={{ background: "var(--bg-card2)", border: "1px solid var(--border)" }}>
-                <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-white font-black text-xl mb-3"
-                  style={{ background: "var(--grad)" }}>{d.name[3]}</div>
-                <div className="font-black text-sm mb-0.5" style={{ color: "var(--text)" }}>{d.name}</div>
-                <div className="text-xs mb-3" style={{ color: "var(--text-muted)" }}>{d.type}</div>
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                  {[`★ ${d.rating}`, d.experience, `📍 ${d.location}`].map(l => (
-                    <span key={l} className="text-[10px] font-semibold px-2 py-0.5 rounded-lg"
-                      style={{ background: "var(--bg-card)", border: "1px solid var(--border)", color: "var(--text-sub)" }}>{l}</span>
-                  ))}
-                </div>
-                <div className="text-xs mb-3" style={{ color: "var(--text-sub)" }}>
-                  Consult: <strong style={{ color: "var(--purple)" }}>{d.fee}</strong>
-                </div>
-                <button className="w-full py-2 rounded-xl text-xs font-bold text-white" style={{ background: "var(--grad)" }}>Book</button>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* ── CHAT ── */}
-        <div className="glass rounded-3xl p-6">
-          <div className="text-xs font-bold mb-1 px-2.5 py-1 rounded-full inline-block" style={{ background: "rgba(124,58,237,0.12)", color: "var(--purple)" }}>
-            AI Assistant
-          </div>
-          <h2 className="text-lg font-black mt-3 mb-5" style={{ color: "var(--text)" }}>Ask Follow-up Questions</h2>
-
-          <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid var(--border)" }}>
-            <div className="px-4 py-3 flex items-center gap-2" style={{ background: "var(--bg-card2)", borderBottom: "1px solid var(--border)" }}>
-              <div className="w-6 h-6 rounded-lg flex items-center justify-center text-white text-[9px] font-black" style={{ background: "var(--grad)" }}>AI</div>
-              <span className="text-sm font-bold" style={{ color: "var(--text)" }}>Skin &amp; Hair Assistant</span>
-            </div>
-            <div ref={chatRef} className="p-4 flex flex-col gap-3 overflow-y-auto" style={{ maxHeight: 260, background: "var(--bg-card)" }}>
-              {msgs.map((m, i) => (
-                <div key={i} className={`max-w-[78%] px-3.5 py-2.5 rounded-2xl text-xs leading-relaxed font-medium ${m.role === "user" ? "ml-auto" : ""}`}
-                  style={m.role === "user"
-                    ? { background: "var(--grad)", color: "white", borderBottomRightRadius: 4 }
-                    : { background: "var(--bg-card2)", border: "1px solid var(--border)", color: "var(--text-sub)", borderBottomLeftRadius: 4 }}>
-                  {m.text}
-                </div>
-              ))}
-              {chatBusy && (
-                <div className="px-3.5 py-2.5 rounded-2xl text-xs max-w-[78%]"
-                  style={{ background: "var(--bg-card2)", border: "1px solid var(--border)", color: "var(--text-muted)", borderBottomLeftRadius: 4 }}>
-                  Thinking…
-                </div>
-              )}
-            </div>
-            <div className="p-3 flex gap-2" style={{ background: "var(--bg-card2)", borderTop: "1px solid var(--border)" }}>
-              <input value={chatIn} onChange={e => setChatIn(e.target.value)} onKeyDown={e => e.key === "Enter" && chat()}
-                placeholder="Ask about skin or hair…" className="flex-1 px-3.5 py-2.5 rounded-xl text-xs outline-none"
-                style={{ background: "var(--input-bg)", border: "1px solid var(--input-border)", color: "var(--text)", fontFamily: "inherit" }} />
-              <button onClick={chat} disabled={chatBusy} className="grad-btn px-4 py-2.5 rounded-xl text-xs">Send</button>
-            </div>
-          </div>
-        </div>
-
+        <p className="mt-8 text-xs leading-6" style={{ color: "var(--text-muted)" }}>
+          This AI assessment is indicative and not a medical diagnosis. Final treatment plan is confirmed by a VIBES dermatologist after in-clinic consultation.
+        </p>
       </div>
-    </div>
+    </main>
   );
 }

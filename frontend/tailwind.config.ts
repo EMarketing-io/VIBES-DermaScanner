@@ -4,12 +4,15 @@ const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
   theme: {
     extend: {
-      fontFamily: { inter: ["Inter", "system-ui", "sans-serif"] },
+      fontFamily: {
+        inter: ["Inter", "system-ui", "sans-serif"],
+        serif: ["Cormorant Garamond", "Georgia", "serif"],
+      },
       colors: {
         brand: {
-          blue:   "#0ea5e9",
-          purple: "#8b5cf6",
-          pink:   "#ec4899",
+          rust: "#b5541c",
+          ink: "#1a1a1a",
+          paper: "#f9f7f4",
         },
       },
     },
