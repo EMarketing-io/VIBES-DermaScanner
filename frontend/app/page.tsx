@@ -41,7 +41,7 @@ export default function Home() {
           <div className="relative mx-auto w-full max-w-[430px]">
             <div className="aspect-[4/5] overflow-hidden border" style={{ borderColor: "var(--border)", background: "var(--bg-soft)" }}>
               <div
-                className="h-full w-full"
+                className="h-full w-full pb-24"
                 style={{
                   background:
                     "radial-gradient(circle at 50% 36%, rgba(181,84,28,0.14), transparent 30%), linear-gradient(180deg, #fff 0%, #f9f7f4 100%)",
@@ -60,12 +60,12 @@ export default function Home() {
                   <path d="M70 130h56M234 130h56M70 320h56M234 320h56" stroke="#b5541c" strokeWidth="2" strokeLinecap="round" />
                 </svg>
               </div>
-            </div>
-            <div className="absolute -bottom-6 left-6 right-6 clinical-card p-5">
-              <div className="section-kicker">Scan Preview</div>
-              <p className="mt-2 text-sm leading-6" style={{ color: "var(--text-sub)" }}>
-                Personal details, photo capture, and report in three focused steps.
-              </p>
+              <div className="absolute bottom-5 left-6 right-6 clinical-card p-5">
+                <div className="section-kicker">Scan Preview</div>
+                <p className="mt-2 text-sm leading-6" style={{ color: "var(--text-sub)" }}>
+                  Personal details, photo capture, and report in three focused steps.
+                </p>
+              </div>
             </div>
           </div>
         </section>

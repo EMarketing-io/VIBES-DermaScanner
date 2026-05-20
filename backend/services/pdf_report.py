@@ -12,6 +12,7 @@ from schemas import LeadRequest
 
 PAGE_W, PAGE_H = 1240, 1754
 MARGIN = 80
+CONTENT_BOTTOM = PAGE_H - 150
 
 
 def _font(size: int, bold: bool = False):
@@ -164,33 +165,29 @@ def _generate_pdf_report(body: LeadRequest) -> BytesIO:
         _draw_image_card(page, draw, x, y, card_w, card_h, f"Scanned Img {i + 1}", file)
     y += card_h + 70
 
-    if y > PAGE_H - 520:
+    if y > CONTENT_BOTTOM - 420:
         page, draw = _new_pdf_page()
         pages.append(page)
         y = 70
 
     y = _section(draw, y, "Face Zone Images")
     card_w, card_h = 330, 250
-    for i, zone in enumerate(face_regions):
-        if not isinstance(zone, dict):
-            continue
-        if y + card_h > PAGE_H - 80:
+    row_gap = 34
+    face_zones = [zone for zone in face_regions if isinstance(zone, dict)]
+    for row_start in range(0, len(face_zones), 3):
+        row = face_zones[row_start:row_start + 3]
+        if y + card_h > CONTENT_BOTTOM:
             page, draw = _new_pdf_page()
             pages.append(page)
             y = _section(draw, 70, "Face Zone Images")
-        x = MARGIN + (i % 3) * (card_w + 30)
-        row_y = y + (i % 6 // 3) * (card_h + 34)
-        _draw_image_card(page, draw, x, row_y, card_w, card_h, str(zone.get("title", "Zone")), zone.get("file"))
-        if i % 6 == 5:
-            y += (card_h + 34) * 2
-    if face_regions:
-        y += (card_h + 34) * (1 if len(face_regions) % 6 <= 3 and len(face_regions) % 6 else 0)
-        if len(face_regions) % 6 > 3:
-            y += (card_h + 34) * 2
+        for col, zone in enumerate(row):
+            x = MARGIN + col * (card_w + 30)
+            _draw_image_card(page, draw, x, y, card_w, card_h, str(zone.get("title", "Zone")), zone.get("file"))
+        y += card_h + row_gap
     y += 30
 
     if hair_regions:
-        if y + 330 > PAGE_H - 80:
+        if y + 330 > CONTENT_BOTTOM:
             page, draw = _new_pdf_page()
             pages.append(page)
             y = 70
@@ -198,7 +195,7 @@ def _generate_pdf_report(body: LeadRequest) -> BytesIO:
         for i, region in enumerate(hair_regions):
             if not isinstance(region, dict):
                 continue
-            if y + card_h > PAGE_H - 80:
+            if y + card_h > CONTENT_BOTTOM:
                 page, draw = _new_pdf_page()
                 pages.append(page)
                 y = _section(draw, 70, "Hair and Scalp Images")
@@ -208,7 +205,7 @@ def _generate_pdf_report(body: LeadRequest) -> BytesIO:
                 y += card_h + 34
         y += card_h + 64
 
-    if y + 500 > PAGE_H - 80:
+    if y + 500 > CONTENT_BOTTOM:
         page, draw = _new_pdf_page()
         pages.append(page)
         y = 70

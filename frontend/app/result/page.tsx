@@ -168,22 +168,22 @@ function concernLabel(name: string) {
 
 function concernPoint(name: string, index: number) {
   const key = concernKey(name);
-  if (key.includes("dark_circle") || key.includes("puffiness")) return { x: index % 2 ? 57 : 43, y: 45, blobW: 8, blobH: 5 };
-  if (key.includes("fine_line")) return { x: 50, y: 34, blobW: 13, blobH: 4 };
-  if (key.includes("pigmentation") || key.includes("dull")) return { x: index % 2 ? 40 : 60, y: 55, blobW: 10, blobH: 8 };
-  if (key.includes("acne") || key.includes("scar") || key.includes("mark") || key.includes("redness")) return { x: index % 2 ? 60 : 40, y: 62, blobW: 9, blobH: 8 };
-  if (key.includes("pores") || key.includes("texture")) return { x: 50, y: 56, blobW: 10, blobH: 9 };
-  if (key.includes("hydration") || key.includes("firmness")) return { x: 50, y: 70, blobW: 11, blobH: 7 };
-  return { x: [43, 57, 50, 40][index] ?? 50, y: [45, 45, 56, 64][index] ?? 56, blobW: 9, blobH: 7 };
+  if (key.includes("dark_circle")) return { x: 44, y: 52, blobW: 6, blobH: 3 };
+  if (key.includes("puffiness")) return { x: 57, y: 52, blobW: 6, blobH: 3 };
+  if (key.includes("pigmentation") || key.includes("dull")) return { x: index % 2 ? 58 : 42, y: 61, blobW: 7, blobH: 5 };
+  if (key.includes("fine_line")) return { x: 50, y: 38, blobW: 12, blobH: 4 };
+  if (key.includes("pores") || key.includes("texture")) return { x: 50, y: 57, blobW: 8, blobH: 6 };
+  if (key.includes("acne") || key.includes("scar") || key.includes("mark") || key.includes("redness")) return { x: index % 2 ? 59 : 41, y: 64, blobW: 8, blobH: 6 };
+  if (key.includes("hydration") || key.includes("firmness")) return { x: 50, y: 72, blobW: 10, blobH: 6 };
+  return { x: [44, 57, 50][index] ?? 50, y: [52, 52, 62][index] ?? 56, blobW: 7, blobH: 5 };
 }
 
 function labelSlot(index: number) {
   return [
-    { x: 28, y: 30, anchor: "end" as const },
-    { x: 72, y: 31, anchor: "start" as const },
-    { x: 27, y: 67, anchor: "end" as const },
-    { x: 73, y: 67, anchor: "start" as const },
-  ][index] ?? { x: 72, y: 67, anchor: "start" as const };
+    { x: 13, y: 27, w: 22, textX: 15 },
+    { x: 65, y: 28, w: 22, textX: 67 },
+    { x: 65, y: 69, w: 22, textX: 67 },
+  ][index] ?? { x: 65, y: 69, w: 22, textX: 67 };
 }
 
 function ScoreGauge({ score }: { score: number }) {
@@ -215,8 +215,7 @@ function ScoreGauge({ score }: { score: number }) {
 }
 
 function HeatMap({ photo, concerns, insight }: { photo: string; concerns: Concern[]; insight: string }) {
-  const topFour = concerns.filter((concern) => concern.score < 75).slice(0, 4);
-  const visibleConcerns = topFour.length ? topFour : concerns.slice(0, 1);
+  const visibleConcerns = concerns.slice(0, 3);
 
   return (
     <div className="clinical-card p-4 md:p-5">
@@ -232,10 +231,11 @@ function HeatMap({ photo, concerns, insight }: { photo: string; concerns: Concer
             return (
               <g key={`${concern.name}-${index}`}>
                 <ellipse cx={point.x} cy={point.y} rx={point.blobW} ry={point.blobH} fill={markerColor} opacity="0.2" />
-                <line x1={slot.x} y1={slot.y + 4} x2={point.x} y2={point.y} stroke="#b5541c" strokeWidth="0.5" />
-                <circle cx={point.x} cy={point.y} r="1.8" fill="#d9a12a" stroke="#b5541c" strokeWidth="0.65" />
-                <text x={slot.x} y={slot.y} textAnchor={slot.anchor} fontSize="2.25" fontWeight="700" fill="#1a1a1a">{concernLabel(concern.name)}</text>
-                <text x={slot.x} y={slot.y + 3.8} textAnchor={slot.anchor} fontSize="1.9" fontWeight="800" fill="#b5541c">
+                <line x1={slot.textX + slot.w / 2 - 1} y1={slot.y + 5} x2={point.x} y2={point.y} stroke="#b5541c" strokeWidth="0.75" />
+                <circle cx={point.x} cy={point.y} r="2.2" fill="#d9a12a" stroke="#b5541c" strokeWidth="0.85" />
+                <rect x={slot.x} y={slot.y - 4.6} width={slot.w} height="11" rx="1.2" fill="#ffffff" stroke="#eadfd5" strokeWidth="0.35" opacity="0.96" />
+                <text x={slot.textX} y={slot.y} fontSize="2.7" fontWeight="800" fill="#1a1a1a">{concernLabel(concern.name)}</text>
+                <text x={slot.textX} y={slot.y + 4.1} fontSize="2.25" fontWeight="900" fill="#b5541c">
                   SCORE {concern.score}
                 </text>
               </g>
@@ -300,12 +300,16 @@ export default function ResultPage() {
   useEffect(() => {
     if (!data?.image_file) return;
     const saved = localStorage.getItem(`vibes_lead_${data.image_file}`);
-    if (!saved) return;
+    if (!saved) {
+      setLeadOpen(true);
+      return;
+    }
     try {
       setLeadForm(JSON.parse(saved) as LeadForm);
       setLeadSubmitted(true);
     } catch {
       setLeadSubmitted(false);
+      setLeadOpen(true);
     }
   }, [data]);
 
@@ -488,7 +492,7 @@ export default function ResultPage() {
               </button>
             ) : (
               <button type="submit" className="grad-btn lead-submit" disabled={leadSaving}>
-                {leadSaving ? "Saving..." : "Save Details"}
+                {leadSaving ? "Submitting..." : "Submit Details"}
               </button>
             )}
           </form>
